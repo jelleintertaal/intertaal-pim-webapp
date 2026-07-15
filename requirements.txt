@@ -1,0 +1,7 @@
+# Webapp (Azure + lokaal): alleen wat de 2-tabs opzoektool nodig heeft.
+# Voor de lokale scraping/pipeline-laptop: installeer daarnaast requirements-local.txt
+streamlit
+pandas
+openpyxl
+requests
+python-dotenv

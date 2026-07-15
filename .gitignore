@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual envs
+.venv/
+venv/
+
+# Secrets (nooit committen!)
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Caches / runtime state
+workspace/
+*.db
+*.sqlite
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
