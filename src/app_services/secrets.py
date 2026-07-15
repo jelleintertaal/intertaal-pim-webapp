@@ -58,25 +58,38 @@ def get_nielsen_api_url() -> str:
 
 
 def get_algolia_config() -> AlgoliaConfig:
+    # 1. Env vars / Streamlit Cloud secrets (hoogste prioriteit)
     app_id = (os.getenv("CB_ALGOLIA_APP_ID") or "").strip()
     api_key = (os.getenv("CB_ALGOLIA_API_KEY") or "").strip()
     index_name = (os.getenv("CB_ALGOLIA_INDEX") or "").strip()
     if app_id and api_key and index_name:
         return AlgoliaConfig(app_id, api_key, index_name)
 
+    # 2. Lokaal algolia_config.json (dev-machine met cb_api_export.py)
     if ALGOLIA_CONFIG_FILE.exists():
         try:
             data = json.loads(ALGOLIA_CONFIG_FILE.read_text(encoding="utf-8"))
             return AlgoliaConfig(data["app_id"], data["api_key"], data["index_name"])
-        except (KeyError, ValueError) as exc:
-            raise MissingSecretsError(
-                "CB-configuratiebestand is onleesbaar of onvolledig. "
-                "Zie docs/runbook-cb-key.md om de CB-sleutel te vernieuwen."
-            ) from exc
+        except (KeyError, ValueError):
+            pass  # val door naar fallback-module
+
+    # 3. Fallback: hardcoded in cb_key_fallback.py — dit bestand wordt
+    #    automatisch bijgewerkt door de desktop-app 'CB Bestellingen'
+    #    (tab 'CB koppelen') via de GitHub Contents API. Streamlit Cloud
+    #    detecteert de push en redeployt binnen ~30 sec.
+    try:
+        from src.app_services import cb_key_fallback as _fb
+        if _fb.CB_ALGOLIA_APP_ID and _fb.CB_ALGOLIA_API_KEY and _fb.CB_ALGOLIA_INDEX:
+            return AlgoliaConfig(
+                _fb.CB_ALGOLIA_APP_ID,
+                _fb.CB_ALGOLIA_API_KEY,
+                _fb.CB_ALGOLIA_INDEX,
+            )
+    except ImportError:
+        pass
 
     raise MissingSecretsError(
-        "CB-sleutel niet gevonden. Zet CB_ALGOLIA_APP_ID, CB_ALGOLIA_API_KEY "
-        "en CB_ALGOLIA_INDEX als omgevingsvariabelen (Azure App Settings), "
-        "of draai lokaal scripts/cb_api_export.py --force-login. "
-        "Zie docs/runbook-cb-key.md."
+        "CB-sleutel niet gevonden. Vraag een collega om in de desktop-app "
+        "'CB Bestellingen' op tabblad 'CB koppelen' de CB-sleutel te "
+        "vernieuwen; binnen 1 minuut is de webapp weer werkend."
     )
