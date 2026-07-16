@@ -24,7 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.fix_druk_outliers_v2 import parse_kb_response_v2  # bewezen parser
-from src.app_services import caches, static_lookups
+from src.app_services import caches, static_lookups, turso_cache
 
 KB_SRU_URL = "http://jsru.kb.nl/sru/sru"
 USER_AGENT = "Intertaal-PIM/1.0 (contact: jelle@acda-rpa.nl)"
@@ -34,18 +34,24 @@ REQUEST_TIMEOUT = 15
 
 def druk_from_caches(isbns: list[str]) -> dict[str, str]:
     """Druk voor zover al bekend. Volgorde:
-      1. Statische repo-lookup (data/druk_lookup.json, ~13k ISBN's, instant)
-      2. Ephemeral session-cache in workspace/druk_raw_cache.json
-      3. Managementboek-cache
+      1. Turso (gedeelde live cache — nieuwe lookups van iedereen)
+      2. Statische repo-lookup (data/druk_lookup.json, ~13k ISBN's, instant)
+      3. Ephemeral session-cache in workspace/druk_raw_cache.json
+      4. Managementboek session-cache
     """
     out: dict[str, str] = {}
-    # 1. Statische lookup uit de repo — dekt de meeste ISBN's
+    # 1. Turso — de gedeelde bron van waarheid
+    if turso_cache.is_enabled():
+        out.update(turso_cache.fetch_druks(isbns))
+    # 2. Statische lookup uit de repo — dekt bij Turso-storing nog steeds veel
     static_druks = static_lookups.get_druks()
     for isbn in isbns:
+        if isbn in out:
+            continue
         d = static_druks.get(isbn)
         if d:
             out[isbn] = d
-    # 2. Session KB-cache (nieuwe lookups van deze deploy)
+    # 3. Session KB-cache (nieuwe lookups van deze deploy)
     kb_cache = caches.load_json_cache(caches.KB_DRUK_CACHE)
     for isbn in isbns:
         if isbn in out:
@@ -55,7 +61,7 @@ def druk_from_caches(isbns: list[str]) -> dict[str, str]:
             druk, _bron = parse_kb_response_v2(xml)
             if druk:
                 out[isbn] = druk
-    # 3. Managementboek session-cache
+    # 4. Managementboek session-cache
     mb_cache = caches.load_json_cache(caches.MB_DRUK_CACHE)
     for isbn in isbns:
         if isbn not in out and mb_cache.get(isbn):
@@ -99,4 +105,8 @@ def druk_live_kb(isbns: list[str],
             caches.save_json_cache(caches.KB_DRUK_CACHE, new_entries)
 
     caches.save_json_cache(caches.KB_DRUK_CACHE, new_entries)
+    # Push nieuwe druks naar Turso zodat ze permanent voor alle gebruikers
+    # beschikbaar zijn (ook na Streamlit Cloud redeploy).
+    if out and turso_cache.is_enabled():
+        turso_cache.upsert_druks(out, source="kb-live")
     return out

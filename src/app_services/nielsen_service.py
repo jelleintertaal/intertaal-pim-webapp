@@ -19,7 +19,7 @@ from typing import Callable
 
 import requests
 
-from src.app_services import caches, static_lookups
+from src.app_services import caches, static_lookups, turso_cache
 from src.app_services.secrets import get_nielsen_credentials, get_nielsen_api_url
 from src.app_services.validation import (
     STATUS_OK, STATUS_OK_CACHE, STATUS_NOT_FOUND, STATUS_QUOTA, STATUS_SOURCE_DOWN,
@@ -83,10 +83,14 @@ def parse_nielsen(xml: str, target_columns: list[str]) -> dict[str, str]:
 
 def count_cache_hits(isbns: list[str]) -> int:
     """Aantal ISBN's dat gratis (zonder Nielsen-call) beantwoord kan worden:
-    telt statische repo-lookup + ephemeral session-cache."""
+    Turso + statische repo-lookup + ephemeral session-cache."""
+    turso_hits: set[str] = set()
+    if turso_cache.is_enabled():
+        turso_hits = set(turso_cache.fetch_nielsen(isbns).keys())
     static_nl = static_lookups.get_nielsen()
     session_cache = caches.load_json_cache(caches.NIELSEN_CACHE)
-    return sum(1 for isbn in isbns if isbn in static_nl or isbn in session_cache)
+    return sum(1 for isbn in isbns
+               if isbn in turso_hits or isbn in static_nl or isbn in session_cache)
 
 
 def enrich(isbns: list[str], target_columns: list[str],
@@ -99,7 +103,12 @@ def enrich(isbns: list[str], target_columns: list[str],
     result = NielsenResult()
     cache = caches.load_json_cache(caches.NIELSEN_CACHE)
     static_nl = static_lookups.get_nielsen()  # {isbn: {kolom: waarde}}
+    # Turso in één batch ophalen (gedeelde live cache — nieuwe records van iedereen)
+    turso_records: dict[str, dict[str, str]] = {}
+    if turso_cache.is_enabled():
+        turso_records = turso_cache.fetch_nielsen(isbns)
     new_entries: dict[str, str] = {}
+    new_nielsen_records: dict[str, dict[str, str]] = {}
     session = requests.Session()
     client_id = password = api_url = None
 
@@ -108,7 +117,19 @@ def enrich(isbns: list[str], target_columns: list[str],
         if progress_cb:
             progress_cb(i + 1, total)
 
-        # 1. Statische repo-lookup: instant, geen Nielsen-call nodig
+        # 1a. Turso: gedeelde live cache — nieuwe records van andere gebruikers
+        if isbn in turso_records:
+            parsed = {k: v for k, v in turso_records[isbn].items() if k in target_columns}
+            if parsed:
+                result.data[isbn] = parsed
+                result.status[isbn] = STATUS_OK_CACHE
+                result.cache_hits += 1
+            else:
+                result.status[isbn] = STATUS_NOT_FOUND
+                result.opmerking[isbn] = "ISBN niet bekend bij Nielsen"
+            continue
+
+        # 1b. Statische repo-lookup (fallback bij Turso-storing)
         if isbn in static_nl:
             parsed = {k: v for k, v in static_nl[isbn].items() if k in target_columns}
             if parsed:
@@ -157,9 +178,20 @@ def enrich(isbns: list[str], target_columns: list[str],
             result.status[isbn] = STATUS_OK_CACHE if from_cache else STATUS_OK
             if from_cache:
                 result.cache_hits += 1
+            else:
+                # Verzamel om naar Turso te pushen (parseer ALLE 140 kolommen,
+                # niet alleen de gevraagde — dan is elke toekomstige lookup
+                # compleet)
+                from src.app_services import templates
+                full_parsed = parse_nielsen(xml, templates.NIELSEN_DATA_COLUMNS)
+                if full_parsed:
+                    new_nielsen_records[isbn] = full_parsed
         else:
             result.status[isbn] = STATUS_NOT_FOUND
             result.opmerking[isbn] = "ISBN niet bekend bij Nielsen"
 
     caches.save_json_cache(caches.NIELSEN_CACHE, new_entries)
+    # Push nieuwe Nielsen records naar Turso — gedeelde live cache
+    if new_nielsen_records and turso_cache.is_enabled():
+        turso_cache.upsert_nielsen(new_nielsen_records)
     return result
