@@ -24,7 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.fix_druk_outliers_v2 import parse_kb_response_v2  # bewezen parser
-from src.app_services import caches
+from src.app_services import caches, static_lookups
 
 KB_SRU_URL = "http://jsru.kb.nl/sru/sru"
 USER_AGENT = "Intertaal-PIM/1.0 (contact: jelle@acda-rpa.nl)"
@@ -33,15 +33,29 @@ REQUEST_TIMEOUT = 15
 
 
 def druk_from_caches(isbns: list[str]) -> dict[str, str]:
-    """Druk voor zover al bekend uit eerdere KB/Managementboek-runs."""
+    """Druk voor zover al bekend. Volgorde:
+      1. Statische repo-lookup (data/druk_lookup.json, ~13k ISBN's, instant)
+      2. Ephemeral session-cache in workspace/druk_raw_cache.json
+      3. Managementboek-cache
+    """
     out: dict[str, str] = {}
+    # 1. Statische lookup uit de repo — dekt de meeste ISBN's
+    static_druks = static_lookups.get_druks()
+    for isbn in isbns:
+        d = static_druks.get(isbn)
+        if d:
+            out[isbn] = d
+    # 2. Session KB-cache (nieuwe lookups van deze deploy)
     kb_cache = caches.load_json_cache(caches.KB_DRUK_CACHE)
     for isbn in isbns:
+        if isbn in out:
+            continue
         xml = kb_cache.get(isbn)
         if xml:
             druk, _bron = parse_kb_response_v2(xml)
             if druk:
                 out[isbn] = druk
+    # 3. Managementboek session-cache
     mb_cache = caches.load_json_cache(caches.MB_DRUK_CACHE)
     for isbn in isbns:
         if isbn not in out and mb_cache.get(isbn):

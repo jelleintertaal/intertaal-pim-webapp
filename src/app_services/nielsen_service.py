@@ -19,7 +19,7 @@ from typing import Callable
 
 import requests
 
-from src.app_services import caches
+from src.app_services import caches, static_lookups
 from src.app_services.secrets import get_nielsen_credentials, get_nielsen_api_url
 from src.app_services.validation import (
     STATUS_OK, STATUS_OK_CACHE, STATUS_NOT_FOUND, STATUS_QUOTA, STATUS_SOURCE_DOWN,
@@ -82,8 +82,11 @@ def parse_nielsen(xml: str, target_columns: list[str]) -> dict[str, str]:
 
 
 def count_cache_hits(isbns: list[str]) -> int:
-    cache = caches.load_json_cache(caches.NIELSEN_CACHE)
-    return sum(1 for isbn in isbns if isbn in cache)
+    """Aantal ISBN's dat gratis (zonder Nielsen-call) beantwoord kan worden:
+    telt statische repo-lookup + ephemeral session-cache."""
+    static_nl = static_lookups.get_nielsen()
+    session_cache = caches.load_json_cache(caches.NIELSEN_CACHE)
+    return sum(1 for isbn in isbns if isbn in static_nl or isbn in session_cache)
 
 
 def enrich(isbns: list[str], target_columns: list[str],
@@ -95,6 +98,7 @@ def enrich(isbns: list[str], target_columns: list[str],
     """
     result = NielsenResult()
     cache = caches.load_json_cache(caches.NIELSEN_CACHE)
+    static_nl = static_lookups.get_nielsen()  # {isbn: {kolom: waarde}}
     new_entries: dict[str, str] = {}
     session = requests.Session()
     client_id = password = api_url = None
@@ -103,6 +107,18 @@ def enrich(isbns: list[str], target_columns: list[str],
     for i, isbn in enumerate(isbns):
         if progress_cb:
             progress_cb(i + 1, total)
+
+        # 1. Statische repo-lookup: instant, geen Nielsen-call nodig
+        if isbn in static_nl:
+            parsed = {k: v for k, v in static_nl[isbn].items() if k in target_columns}
+            if parsed:
+                result.data[isbn] = parsed
+                result.status[isbn] = STATUS_OK_CACHE
+                result.cache_hits += 1
+            else:
+                result.status[isbn] = STATUS_NOT_FOUND
+                result.opmerking[isbn] = "ISBN niet bekend bij Nielsen"
+            continue
 
         if isbn in cache:
             xml = cache[isbn]
