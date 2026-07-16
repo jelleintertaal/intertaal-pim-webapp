@@ -179,10 +179,11 @@ with tab_cb:
     )
 
     cb_file = st.file_uploader("Excel met ISBN's", type=["xlsx", "xls"], key="cb_upload")
-    druk_live = st.checkbox(
-        "Druk live opzoeken bij KB.nl voor onbekende ISBN's "
-        "(±0,4 sec per nieuw ISBN — uitzetten maakt grote lijsten sneller)",
-        value=True, key="cb_druk_live")
+    druk_live = st.toggle(
+        "Langer zoeken (druk ook live opzoeken bij KB.nl voor onbekende ISBN's)",
+        value=False, key="cb_druk_live",
+        help="Uit = snel, druk alleen uit de cache. "
+             "Aan = trager (±0,4 sec per nieuw ISBN), maar completere druk-info voor grote lijsten.")
 
     if cb_file is not None:
         try:
