@@ -25,7 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import streamlit as st
 
 from src.app_services import templates
-from src.app_services import nielsen_service, cb_service, druk_service
+from src.app_services import nielsen_service, cb_service
 from src.app_services.output import build_output_df, df_to_xlsx_bytes
 from src.app_services.secrets import MissingSecretsError, get_algolia_config, get_nielsen_credentials
 from src.app_services.validation import (
@@ -175,15 +175,11 @@ with tab_cb:
     st.subheader("CB opzoeken")
     st.markdown(
         "Zoekt ISBN's op in CB Online (Centraal Boekhuis) en levert het "
-        "vaste 16-koloms format, inclusief druk (via KB.nl) en cover-URL."
+        "vaste 50-koloms format met alle CB-metadata én een grotere cover-URL "
+        "(ImageUrl_nieuw, uit hetzelfde Boekhuis-ecosysteem)."
     )
 
     cb_file = st.file_uploader("Excel met ISBN's", type=["xlsx", "xls"], key="cb_upload")
-    druk_live = st.toggle(
-        "Langer zoeken (druk ook live opzoeken bij KB.nl voor onbekende ISBN's)",
-        value=False, key="cb_druk_live",
-        help="Uit = snel, druk alleen uit de cache. "
-             "Aan = trager (±0,4 sec per nieuw ISBN), maar completere druk-info voor grote lijsten.")
 
     if cb_file is not None:
         try:
@@ -206,30 +202,17 @@ with tab_cb:
                         records = cb_service.fetch_cb_records(
                             cb_uniek, cfg,
                             progress_cb=lambda b, t: voortgang.progress(
-                                min(b / t, 1.0) * 0.4, text=f"CB: batch {b}/{t}"))
+                                min(b / t, 1.0), text=f"CB: batch {b}/{t}"))
                     except (cb_service.CBAuthError, cb_service.CBServiceError) as exc:
                         st.error(str(exc))
                         records = None
 
                     if records is not None:
                         gevonden = [i for i in cb_uniek if i in records]
-
-                        # Druk: eerst caches (instant), daarna optioneel live KB.nl
-                        voortgang.progress(0.45, text="Druk: caches raadplegen...")
-                        druk = druk_service.druk_from_caches(gevonden)
-                        if druk_live:
-                            missend = [i for i in gevonden if i not in druk]
-                            if missend:
-                                def _kb_progress(done: int, total: int) -> None:
-                                    voortgang.progress(
-                                        0.5 + (done / total) * 0.5,
-                                        text=f"Druk via KB.nl: {done}/{total} nieuwe ISBN's")
-                                druk.update(druk_service.druk_live_kb(missend, _kb_progress))
                         voortgang.progress(1.0, text="Klaar")
 
                         data_by_isbn = {
-                            isbn: cb_service.build_cb_row(isbn, records[isbn],
-                                                          druk.get(isbn, ""))
+                            isbn: cb_service.build_cb_row(isbn, records[isbn])
                             for isbn in gevonden
                         }
                         bron = {}
@@ -238,18 +221,17 @@ with tab_cb:
                                 continue
                             if row.isbn in records:
                                 row.status = STATUS_OK
-                                bron[row.isbn] = ("CB + KB.nl (druk)"
-                                                  if druk.get(row.isbn) else "CB")
+                                bron[row.isbn] = "CB"
                             else:
                                 row.status = STATUS_NOT_FOUND
                                 row.opmerking = "ISBN niet bekend bij CB"
 
                         df = build_output_df(cb_rows, data_by_isbn,
-                                             templates.CB_COLUMNS, "ISBN", bron)
+                                             templates.CB_COLUMNS, templates.CB_ISBN_COL,
+                                             bron)
                         st.session_state["cb_output"] = df
                         st.success(f"Klaar: {len(gevonden)} van {len(cb_uniek)} unieke "
-                                   f"ISBN's gevonden bij CB "
-                                   f"({sum(1 for i in gevonden if druk.get(i))} met druk).")
+                                   f"ISBN's gevonden bij CB.")
 
     if "cb_output" in st.session_state:
         _download_knop(st.session_state["cb_output"], "cb_verrijkt", "cb_download")

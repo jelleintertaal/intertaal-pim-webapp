@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 cb_service.py — CB Online lookups via de Algolia-index + mapping naar het
-vaste 16-koloms "CB data gewenst"-format.
+vaste 50-koloms "CB nieuwe uitvraag"-format.
 
-De veld-mapping is 1-op-1 overgenomen uit scripts/cb_gewenst_26k.py
-(build_gewenst), de bewezen implementatie van het afgesproken format.
-
-afbeeldingsurl: het mind-books patroon (grote cover, zelfde
-Libris/Boekhuis-ecosysteem) — bewust ZONDER live verificatie (keuze Jelle):
-instant, maar bij een ISBN dat mind-books niet kent geeft de URL een 404.
+Alle rauwe CB Algolia velden gaan 1-op-1 door naar de output (met listwaarden
+pipe-gescheiden). Wij voegen alleen 'ImageUrl_nieuw' toe: het mind-books
+patroon (grote cover, zelfde Libris/Boekhuis-ecosysteem als CB), bewust
+ZONDER live verificatie zodat het instant is.
 """
 from __future__ import annotations
 
@@ -21,15 +19,6 @@ from src.app_services.secrets import AlgoliaConfig
 
 BATCH_SIZE = 500
 REQUEST_TIMEOUT = 60
-
-BESCHIKBAARHEID = {
-    "1": "Leverbaar",
-    "2": "Nog niet verschenen",
-    "3": "Niet leverbaar, wordt herdrukt",
-    "4": "Niet leverbaar bij CB",
-    "5": "Niet leverbaar",
-    "6": "Wordt opnieuw uitgegeven",
-}
 
 
 class CBAuthError(RuntimeError):
@@ -97,42 +86,75 @@ def image_url_for(isbn: str) -> str:
 
 
 def build_cb_row(isbn: str, record: dict, druk: str = "") -> dict[str, str]:
-    """Map één CB-record naar het 16-koloms template (kolomnamen exact)."""
-    hoofdtitel = _g(record, "Hoofdtitel")
-    ondertitel = _g(record, "Ondertitel")
+    """Map één CB-record naar het 50-koloms format (rauwe API-veldnamen).
 
-    vd_raw = _g(record, "Verschijningsdatum")
-    verschijningsdatum = (f"{vd_raw[:4]}-{vd_raw[4:6]}-{vd_raw[6:8]}"
-                          if len(vd_raw) >= 8 else vd_raw)
+    Alle Algolia velden gaan 1-op-1 door; listwaarden worden pipe-gescheiden
+    (bijv. 'Auteur: Jan | Piet'). ImageUrl_nieuw is de mind-books URL die de
+    lelijke CB-thumbnail vervangt door de grote cover uit hetzelfde
+    Libris/Boekhuis-ecosysteem.
 
-    prijs = _g(record, "Prijs")
-
-    nur = _g(record, "Nur")
-    thema_hoofd = _g(record, "ThemaHoofdSubject")
-    thema_sub = _g(record, "ThemaSubjects")
-    nur_parts = [p for p in (nur, thema_hoofd) if p]
-    if thema_sub and thema_sub != thema_hoofd:
-        nur_parts.append(thema_sub)
-
-    bestelbaar = _g(record, "bestelbaar_nl")
-    code = _g(record, "BeschikbaarheidsCode")
-    leverbaarheid = bestelbaar or BESCHIKBAARHEID.get(code, f"Code {code}" if code else "")
-
+    Parameter 'druk' wordt hier NIET gebruikt (CB Algolia bevat geen druk-veld,
+    en het huidige 50-koloms format heeft geen aparte 'Druk'-kolom). We laten
+    'm in de signature voor achterwaartse compatibiliteit met app.py.
+    """
+    _ = druk  # bewust ongebruikt in dit format
     return {
-        "ISBN": isbn,
-        "TITLE": hoofdtitel,
-        "Binding": _g(record, "Verschijningsvorm"),
-        "Title": f"{hoofdtitel} - {ondertitel}" if (hoofdtitel and ondertitel) else (hoofdtitel or ondertitel),
-        "verschijningsdatum": verschijningsdatum,
-        "LISTPRICE": prijs,
-        "in/ex btw": "incl. btw" if prijs else "",
-        "Valuta": "EUR" if prijs else "",
-        "Publisher": _g(record, "Uitgever") or _g(record, "Imprint"),
-        "Druk": druk,
-        "Omschrijving": ondertitel,
-        "afbeeldingsurl": image_url_for(isbn),
-        "serienaam": _g(record, "ReeksNm"),
-        "seriedeel ": _g(record, "ReeksNr"),
-        "NUR CODES studydomein / tags": " | ".join(nur_parts),
-        "leverbaarheid": leverbaarheid,
+        "Isbn": isbn,
+        # Identificatie
+        "objectID": _g(record, "objectID"),
+        "LastUpdateDTD": _g(record, "LastUpdateDTD"),
+        # Titel
+        "Hoofdtitel": _g(record, "Hoofdtitel"),
+        "Ondertitel": _g(record, "Ondertitel"),
+        "Deeltitel": _g(record, "Deeltitel"),
+        "Sectietitel": _g(record, "Sectietitel"),
+        "OrigineleTitel": _g(record, "OrigineleTitel"),
+        # Betrokkenen
+        "Auteur": _g(record, "Auteur"),
+        "EersteBetrokkene": _g(record, "EersteBetrokkene"),
+        "Redacteur": _g(record, "Redacteur"),
+        "Vertaler": _g(record, "Vertaler"),
+        "Bewerker": _g(record, "Bewerker"),
+        "Illustrator": _g(record, "Illustrator"),
+        "Fotograaf": _g(record, "Fotograaf"),
+        "Corporatie": _g(record, "Corporatie"),
+        # Uitgeverij / verschijning
+        "Uitgever": _g(record, "Uitgever"),
+        "Imprint": _g(record, "Imprint"),
+        "Verschijningsvorm": _g(record, "Verschijningsvorm"),
+        "Taal": _g(record, "Taal"),
+        "Boeksoort": _g(record, "Boeksoort"),
+        "Verschijningsdatum": _g(record, "Verschijningsdatum"),
+        "Verschijningsjaar": _g(record, "Verschijningsjaar"),
+        "VerwachteVerschijningsdatum": _g(record, "VerwachteVerschijningsdatum"),
+        "SpecialeUitgaveInd": _g(record, "SpecialeUitgaveInd"),
+        "ReeksNm": _g(record, "ReeksNm"),
+        "ReeksNr": _g(record, "ReeksNr"),
+        "Prijs": _g(record, "Prijs"),
+        # NUR / categorisatie
+        "Nur": _g(record, "Nur"),
+        "NurNivo1": _g(record, "NurNivo1"),
+        "NurNivo2": _g(record, "NurNivo2"),
+        "NurNivo3": _g(record, "NurNivo3"),
+        # Thema
+        "ThemaHoofdSubject": _g(record, "ThemaHoofdSubject"),
+        "ThemaSubjects": _g(record, "ThemaSubjects"),
+        "ThemaExtraSubjects": _g(record, "ThemaExtraSubjects"),
+        "ThemaQualifiersPedagogischDoel": _g(record, "ThemaQualifiersPedagogischDoel"),
+        "ThemaQualifiersTaal": _g(record, "ThemaQualifiersTaal"),
+        "ThemaQualifiersDoelgroep": _g(record, "ThemaQualifiersDoelgroep"),
+        "ThemaQualifiersPlaats": _g(record, "ThemaQualifiersPlaats"),
+        "ThemaQualifiersTijdperk": _g(record, "ThemaQualifiersTijdperk"),
+        "ThemaQualifiersStijl": _g(record, "ThemaQualifiersStijl"),
+        # Beschikbaarheid / verkoop
+        "BeschikbaarheidsCode": _g(record, "BeschikbaarheidsCode"),
+        "bestelbaar_nl": _g(record, "bestelbaar_nl"),
+        "bestelbaar_be": _g(record, "bestelbaar_be"),
+        "is_bestelbaar": _g(record, "is_bestelbaar"),
+        "assortiment_type_nl": _g(record, "assortiment_type_nl"),
+        "assortiment_type_be": _g(record, "assortiment_type_be"),
+        "VerkooplandUitsluiting": _g(record, "VerkooplandUitsluiting"),
+        # Afbeelding
+        "ImageUrl": _g(record, "ImageUrl"),
+        "ImageUrl_nieuw": image_url_for(isbn),
     }

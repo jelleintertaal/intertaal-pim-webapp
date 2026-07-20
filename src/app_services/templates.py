@@ -45,13 +45,29 @@ NIELSEN_COLUMNS = [
 # De 140 op te halen Nielsen-velden (alles behalve de ISBN-kolom)
 NIELSEN_DATA_COLUMNS = [c for c in NIELSEN_COLUMNS if c != NIELSEN_ISBN_COL]
 
-CB_ISBN_COL = 'ISBN'
+CB_ISBN_COL = 'Isbn'
 
+# Alle 50 kolommen zoals aangeleverd in "CB nieuwe uitvraag_FILLED (1).xlsx":
+# kolom 1 (Isbn) = input-sleutel, 2 t/m 49 = rauwe CB Algolia velden,
+# 50 (ImageUrl_nieuw) = door onze webapp toegevoegde mind-books URL
+# (grote cover, i.p.v. de CB thumbnail).
 CB_COLUMNS = [
-    'ISBN', 'TITLE', 'Binding', 'Title',
-    'verschijningsdatum', 'LISTPRICE', 'in/ex btw', 'Valuta',
-    'Publisher', 'Druk', 'Omschrijving', 'afbeeldingsurl',
-    'serienaam', 'seriedeel ', 'NUR CODES studydomein / tags', 'leverbaarheid',
+    'Isbn',
+    'objectID', 'LastUpdateDTD',
+    'Hoofdtitel', 'Ondertitel', 'Deeltitel', 'Sectietitel', 'OrigineleTitel',
+    'Auteur', 'EersteBetrokkene', 'Redacteur', 'Vertaler', 'Bewerker',
+    'Illustrator', 'Fotograaf', 'Corporatie',
+    'Uitgever', 'Imprint', 'Verschijningsvorm', 'Taal', 'Boeksoort',
+    'Verschijningsdatum', 'Verschijningsjaar', 'VerwachteVerschijningsdatum',
+    'SpecialeUitgaveInd', 'ReeksNm', 'ReeksNr', 'Prijs',
+    'Nur', 'NurNivo1', 'NurNivo2', 'NurNivo3',
+    'ThemaHoofdSubject', 'ThemaSubjects', 'ThemaExtraSubjects',
+    'ThemaQualifiersPedagogischDoel', 'ThemaQualifiersTaal',
+    'ThemaQualifiersDoelgroep', 'ThemaQualifiersPlaats',
+    'ThemaQualifiersTijdperk', 'ThemaQualifiersStijl',
+    'BeschikbaarheidsCode', 'bestelbaar_nl', 'bestelbaar_be', 'is_bestelbaar',
+    'assortiment_type_nl', 'assortiment_type_be', 'VerkooplandUitsluiting',
+    'ImageUrl', 'ImageUrl_nieuw',
 ]
 
 STATUS_COL = "Status"
