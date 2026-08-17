@@ -201,6 +201,25 @@ div[class*="st-key-card_"]:hover .pim-card-icon { transform: scale(1.12) rotate(
 /* Voortgangsbalk in brand-groen */
 .stProgress > div > div > div > div { background: var(--it-groen) !important; }
 
+/* Exact-publicatieknop (nog op slot): bewust aanwezig maar gedimd */
+div[class*="st-key-"][class*="_exactblok"] .stButton button {
+    width: 100%; padding: 1rem 1.5rem;
+    font-size: 1.12rem; font-weight: 700;
+    border-radius: 14px;
+    border: 2px dashed #c6cdd0;
+    background: var(--it-grijs); color: #8a9297;
+    cursor: not-allowed;
+    transition: border-color .25s, color .25s;
+}
+div[class*="st-key-"][class*="_exactblok"] .stButton button:hover {
+    border-color: var(--it-paars); color: var(--it-paars);
+}
+.pim-exact-hint {
+    text-align: center; color: #8a9297;
+    font-size: .8rem; font-weight: 600; margin-top: .35rem;
+    letter-spacing: .02em; text-transform: uppercase;
+}
+
 /* Login */
 .pim-login {
     max-width: 430px; margin: 8vh auto 0 auto; text-align: center;
@@ -291,18 +310,49 @@ def _terug_knop() -> None:
         st.markdown('</div>', unsafe_allow_html=True)
 
 
-def _download_blok(df, prefix: str, key: str) -> None:
+def _resultaat_blok(df, prefix: str, key_prefix: str) -> None:
+    """Resultaat: bewerken -> downloaden -> (straks) publiceren naar Exact.
+
+    De data-editor bewaart bewerkingen per sessie (widget-state op key);
+    de download en de toekomstige Exact-publicatie gebruiken de BEWERKTE
+    versie, niet de ruwe opzoek-output.
+    """
+    with st.expander("✏️  Output bekijken & bewerken", expanded=False):
+        st.caption(
+            "Pas velden direct aan in de tabel. De download — en straks de "
+            "publicatie naar Exact — gebruiken jouw bewerkte versie."
+        )
+        edited = st.data_editor(
+            df, use_container_width=True, height=420,
+            num_rows="fixed", key=f"{key_prefix}_editor",
+        )
+
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
-    st.download_button(
-        label="⬇️  Download verrijkt Excel-bestand",
-        data=df_to_xlsx_bytes(df),
-        file_name=f"{prefix}_{stamp}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key=key,
-        use_container_width=True,
-    )
-    with st.expander("Voorbeeld van de output (eerste 25 rijen)"):
-        st.dataframe(df.head(25), use_container_width=True)
+    col_dl, col_exact = st.columns(2, gap="medium")
+    with col_dl:
+        st.download_button(
+            label="⬇️  Download verrijkt Excel-bestand",
+            data=df_to_xlsx_bytes(edited),
+            file_name=f"{prefix}_{stamp}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"{key_prefix}_download",
+            use_container_width=True,
+        )
+    with col_exact:
+        with st.container(key=f"{key_prefix}_exactblok"):
+            st.button(
+                "🔒  Publiceer producten naar Exact",
+                key=f"{key_prefix}_exact",
+                disabled=True,
+                use_container_width=True,
+                help="De Exact Online-koppeling is in voorbereiding. Zodra die "
+                     "live is, zet deze knop de bewerkte producten in de "
+                     "publicatie-wachtrij.",
+            )
+            st.markdown(
+                '<div class="pim-exact-hint">Exact-koppeling in voorbereiding</div>',
+                unsafe_allow_html=True,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -429,7 +479,7 @@ def view_nielsen() -> None:
                     st.success(melding)
 
     if "nl_output" in st.session_state:
-        _download_blok(st.session_state["nl_output"], "nielsen_verrijkt", "nl_download")
+        _resultaat_blok(st.session_state["nl_output"], "nielsen_verrijkt", "nl")
 
 
 def view_cb() -> None:
@@ -504,7 +554,7 @@ def view_cb() -> None:
                     st.success(f"Klaar: {len(gevonden)} van {len(uniek)} unieke ISBN's gevonden bij CB.")
 
     if "cb_output" in st.session_state:
-        _download_blok(st.session_state["cb_output"], "cb_verrijkt", "cb_download")
+        _resultaat_blok(st.session_state["cb_output"], "cb_verrijkt", "cb")
 
 
 # ---------------------------------------------------------------------------
