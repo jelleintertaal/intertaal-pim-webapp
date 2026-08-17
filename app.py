@@ -1,16 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Intertaal PIM — ISBN opzoektool (Nielsen + CB).
+Intertaal PIM — ISBN opzoektool (Nielsen + CB), in Intertaal-huisstijl.
 
-Bewust simpel gehouden: twee tabs, beide met dezelfde flow:
-  Excel uploaden -> ISBNs valideren -> bron bevragen -> Excel downloaden
-  in het vaste template-format (+ Status/Bron-kolommen achteraan).
+Views (st.session_state.view): home -> nielsen | cb.
+Zelfde flow als voorheen per tool: Excel uploaden -> ISBNs valideren ->
+bron bevragen -> Excel downloaden in het vaste template-format.
 
-Geen scrapers, geen database, geen subprocess-aanroepen: de oude
-beheersfunctionaliteit is verwijderd (archief: _archive/app-legacy/).
-Uploads blijven in-memory per gebruikerssessie; er wordt niets van de
-upload op schijf bewaard. Secrets komen uit env vars / .env en worden
-nooit in de interface of de output getoond.
+Huisstijl overgenomen van intertaalid.nl (Shopify-thema CSS-variabelen):
+  oranje #d2701c (koppen/accenten), groen #6eaa41 (primaire acties),
+  blauw #0073b7 (secundair), paars #51396d, achtergrond #f3f5f6, font Inter.
 """
 from __future__ import annotations
 
@@ -33,13 +31,219 @@ from src.app_services.validation import (
     STATUS_OK, STATUS_OK_CACHE, STATUS_NOT_FOUND,
 )
 
-st.set_page_config(page_title="Intertaal PIM — ISBN opzoeken", page_icon="📚", layout="centered")
+LOGO_URL = "https://intertaalid.nl/cdn/shop/files/Naam_logo_255x@2x.png?v=1747650479"
+FAVICON_URL = "https://intertaalid.nl/cdn/shop/files/FAVICON_INTERAAL_ID_96x96.png?v=1748509516"
 
+st.set_page_config(
+    page_title="Intertaal PIM",
+    page_icon=FAVICON_URL,
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+# ---------------------------------------------------------------------------
+# Huisstijl-CSS (Intertaalid.nl-palet + interactieve kaarten)
+# ---------------------------------------------------------------------------
+
+_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root {
+    --it-oranje: #d2701c;
+    --it-groen: #6eaa41;
+    --it-groen-donker: #5c8f36;
+    --it-blauw: #0073b7;
+    --it-blauw-donker: #00436b;
+    --it-paars: #51396d;
+    --it-grijs: #f3f5f6;
+    --it-border: #e1e3e4;
+}
+
+html, body, [class*="css"], .stMarkdown, button, input {
+    font-family: 'Inter', sans-serif !important;
+}
+
+/* Streamlit-chrome verbergen + compact bovenaan */
+#MainMenu, footer, header[data-testid="stHeader"] { display: none !important; }
+.block-container {
+    padding-top: 1.2rem !important;
+    padding-bottom: 1rem !important;
+    max-width: 1240px;
+}
+
+/* ------- Brand header ------- */
+.pim-header {
+    display: flex; align-items: center; gap: 1.2rem;
+    padding: .4rem 0 1rem 0;
+    border-bottom: 3px solid var(--it-oranje);
+    margin-bottom: 1.4rem;
+}
+.pim-header img { height: 46px; }
+.pim-header .pim-title {
+    font-size: 1.5rem; font-weight: 700; color: #1a1a1a; letter-spacing: -.02em;
+}
+.pim-header .pim-title span { color: var(--it-oranje); }
+.pim-header .pim-sub {
+    margin-left: auto; color: #6a7175; font-size: .95rem; font-weight: 500;
+}
+
+/* ------- Grote keuzekaarten (home) ------- */
+div[class*="st-key-card_"] {
+    background: #ffffff;
+    border: 1px solid var(--it-border);
+    border-radius: 22px;
+    padding: 2.4rem 2.2rem 1.6rem 2.2rem;
+    position: relative;
+    overflow: hidden;
+    transition: transform .28s cubic-bezier(.2,.8,.3,1), box-shadow .28s;
+    min-height: 430px;
+}
+div[class*="st-key-card_"]::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 7px;
+    transform: scaleX(0); transform-origin: left;
+    transition: transform .35s cubic-bezier(.2,.8,.3,1);
+}
+.st-key-card_nielsen::before { background: linear-gradient(90deg, var(--it-blauw), #37a3e0); }
+.st-key-card_cb::before      { background: linear-gradient(90deg, var(--it-oranje), #f0a04b); }
+div[class*="st-key-card_"]:hover {
+    transform: translateY(-8px);
+    box-shadow: 0 22px 48px rgba(0,0,0,.13);
+}
+div[class*="st-key-card_"]:hover::before { transform: scaleX(1); }
+
+.pim-card-icon {
+    width: 84px; height: 84px; border-radius: 20px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 2.6rem; margin-bottom: 1.1rem;
+    transition: transform .3s;
+}
+div[class*="st-key-card_"]:hover .pim-card-icon { transform: scale(1.12) rotate(-4deg); }
+.pim-icon-blauw  { background: rgba(0,115,183,.10); }
+.pim-icon-oranje { background: rgba(210,112,28,.10); }
+
+.pim-card-titel { font-size: 1.7rem; font-weight: 800; color: #1a1a1a; margin-bottom: .4rem; letter-spacing: -.02em; }
+.pim-card-tekst { color: #5a6165; font-size: 1.02rem; line-height: 1.55; margin-bottom: 1rem; }
+.pim-badges { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .4rem; }
+.pim-badge {
+    padding: .34rem .8rem; border-radius: 999px;
+    font-size: .82rem; font-weight: 600;
+}
+.pim-badge-blauw  { background: rgba(0,115,183,.10); color: var(--it-blauw); }
+.pim-badge-oranje { background: rgba(210,112,28,.10); color: var(--it-oranje); }
+.pim-badge-groen  { background: rgba(110,170,65,.12); color: #4e7a2e; }
+.pim-badge-paars  { background: rgba(81,57,109,.10); color: var(--it-paars); }
+
+/* Kaart-knoppen: groot en in kaartkleur */
+.st-key-card_nielsen .stButton button,
+.st-key-card_cb .stButton button {
+    width: 100%; padding: .95rem 1.4rem;
+    font-size: 1.08rem; font-weight: 700;
+    border-radius: 14px; border: none; color: #fff;
+    transition: filter .2s, transform .15s;
+}
+.st-key-card_nielsen .stButton button { background: var(--it-blauw); }
+.st-key-card_cb .stButton button      { background: var(--it-oranje); }
+.st-key-card_nielsen .stButton button:hover,
+.st-key-card_cb .stButton button:hover { filter: brightness(1.12); transform: scale(1.02); color: #fff; }
+
+/* ------- Tool-views ------- */
+.pim-terug .stButton button {
+    background: transparent; border: 1.5px solid var(--it-border);
+    border-radius: 10px; color: #444; font-weight: 600;
+    transition: border-color .2s, color .2s;
+}
+.pim-terug .stButton button:hover { border-color: var(--it-oranje); color: var(--it-oranje); }
+
+/* Upload-dropzone groot en on-brand */
+[data-testid="stFileUploaderDropzone"] {
+    min-height: 150px;
+    border: 2.5px dashed var(--it-border) !important;
+    border-radius: 18px !important;
+    background: #fbfcfc !important;
+    transition: border-color .25s, background .25s, transform .2s;
+}
+[data-testid="stFileUploaderDropzone"]:hover {
+    border-color: var(--it-groen) !important;
+    background: rgba(110,170,65,.05) !important;
+    transform: scale(1.01);
+}
+
+/* Metric-tegels */
+.pim-metrics { display: flex; gap: .9rem; margin: .3rem 0 .9rem 0; }
+.pim-metric {
+    flex: 1; background: #fff; border: 1px solid var(--it-border);
+    border-radius: 16px; padding: 1rem .6rem; text-align: center;
+    transition: transform .2s, box-shadow .2s;
+}
+.pim-metric:hover { transform: translateY(-3px); box-shadow: 0 8px 22px rgba(0,0,0,.08); }
+.pim-metric .m-waarde { font-size: 1.9rem; font-weight: 800; line-height: 1.1; }
+.pim-metric .m-label  { font-size: .82rem; color: #6a7175; font-weight: 600; margin-top: .2rem; }
+.m-blauw  { color: var(--it-blauw); }
+.m-groen  { color: var(--it-groen); }
+.m-oranje { color: var(--it-oranje); }
+.m-paars  { color: var(--it-paars); }
+
+/* Start/download-knoppen groot en groen */
+.pim-actie .stButton button, .stDownloadButton button {
+    width: 100%; padding: 1rem 1.5rem;
+    background: var(--it-groen); color: #fff;
+    font-size: 1.12rem; font-weight: 700;
+    border: none; border-radius: 14px;
+    transition: background .2s, transform .15s, box-shadow .2s;
+}
+.pim-actie .stButton button:hover, .stDownloadButton button:hover {
+    background: var(--it-groen-donker); color: #fff;
+    transform: translateY(-2px); box-shadow: 0 10px 26px rgba(110,170,65,.35);
+}
+.pim-actie .stButton button:disabled { background: #c6cdd0; }
+
+/* Voortgangsbalk in brand-groen */
+.stProgress > div > div > div > div { background: var(--it-groen) !important; }
+
+/* Login */
+.pim-login {
+    max-width: 430px; margin: 8vh auto 0 auto; text-align: center;
+    background: #fff; border: 1px solid var(--it-border); border-radius: 22px;
+    padding: 2.6rem 2.4rem; box-shadow: 0 18px 44px rgba(0,0,0,.08);
+}
+.pim-login img { height: 52px; margin-bottom: 1.2rem; }
+</style>
+"""
+
+
+def _inject_css() -> None:
+    st.markdown(_CSS, unsafe_allow_html=True)
+
+
+def _brand_header(subtitel: str) -> None:
+    st.markdown(
+        f"""
+        <div class="pim-header">
+            <img src="{LOGO_URL}" alt="Intertaal" />
+            <div class="pim-title">PIM <span>&middot;</span> {subtitel}</div>
+            <div class="pim-sub">Product Informatie Management</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _metric_tegels(items: list[tuple[str, str, str]]) -> None:
+    """items: (waarde, label, kleurklasse)"""
+    tegels = "".join(
+        f'<div class="pim-metric"><div class="m-waarde {kleur}">{waarde}</div>'
+        f'<div class="m-label">{label}</div></div>'
+        for waarde, label, kleur in items
+    )
+    st.markdown(f'<div class="pim-metrics">{tegels}</div>', unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Wachtwoord-poort (gebrand)
+# ---------------------------------------------------------------------------
 
 def _require_password() -> None:
-    """Simpele wachtwoord-poort. Wachtwoord komt uit env var of Streamlit
-    secrets (APP_PASSWORD). Als er geen wachtwoord is ingesteld, staat de
-    app open (handig voor lokaal ontwikkelen)."""
     import os as _os
     expected = _os.getenv("APP_PASSWORD", "").strip()
     try:
@@ -47,191 +251,275 @@ def _require_password() -> None:
             expected = str(st.secrets["APP_PASSWORD"]).strip()
     except Exception:
         pass
-    if not expected:
-        return  # geen wachtwoord ingesteld -> vrije toegang
-
-    if st.session_state.get("_auth_ok"):
+    if not expected or st.session_state.get("_auth_ok"):
         return
 
-    st.title("📚 Intertaal PIM — ISBN opzoeken")
-    st.markdown("Deze tool is alleen voor Intertaal-medewerkers. Voer het gedeelde wachtwoord in.")
-    pw = st.text_input("Wachtwoord", type="password", key="_auth_pw")
-    if st.button("Inloggen", type="primary"):
-        if pw == expected:
-            st.session_state["_auth_ok"] = True
-            st.rerun()
-        else:
-            st.error("Onjuist wachtwoord.")
+    _inject_css()
+    st.markdown(
+        f"""<div class="pim-login"><img src="{LOGO_URL}" alt="Intertaal"/>
+        <div style="font-size:1.25rem;font-weight:700;margin-bottom:.3rem;">PIM &mdash; ISBN opzoeken</div>
+        <div style="color:#6a7175;font-size:.95rem;margin-bottom:.6rem;">
+        Alleen voor Intertaal-medewerkers.</div></div>""",
+        unsafe_allow_html=True,
+    )
+    _, mid, _ = st.columns([1, 1.2, 1])
+    with mid:
+        pw = st.text_input("Wachtwoord", type="password", key="_auth_pw",
+                           label_visibility="collapsed", placeholder="Wachtwoord")
+        with st.container(key="login_actie"):
+            st.markdown('<div class="pim-actie">', unsafe_allow_html=True)
+            if st.button("Inloggen", key="login_btn", use_container_width=True):
+                if pw == expected:
+                    st.session_state["_auth_ok"] = True
+                    st.rerun()
+                else:
+                    st.error("Onjuist wachtwoord.")
+            st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
 
-_require_password()
+# ---------------------------------------------------------------------------
+# Gedeelde bouwstenen
+# ---------------------------------------------------------------------------
 
-st.title("📚 Intertaal PIM — ISBN opzoeken")
-st.caption(
-    "Upload een Excel met ISBN's, kies de bron en download het verrijkte "
-    "bestand in het vaste format."
-)
-
-tab_nielsen, tab_cb = st.tabs(["Nielsen opzoeken", "CB opzoeken"])
-
-
-def _toon_upload_info(rows, kolom, extra: str = "") -> None:
-    geldig = [r for r in rows if r.isbn]
-    uniek = unique_valid_isbns(rows)
-    tekst = (f"**{len(rows)}** rijen gelezen — **{len(geldig)}** geldige ISBN's "
-             f"(**{len(uniek)}** uniek), kolom: `{kolom}`")
-    if len(geldig) < len(rows):
-        tekst += f" — {len(rows) - len(geldig)} rij(en) zonder geldig ISBN (blokkeren niets)"
-    st.info(tekst + (f"\n\n{extra}" if extra else ""))
+def _terug_knop() -> None:
+    with st.container(key="terugblok"):
+        st.markdown('<div class="pim-terug">', unsafe_allow_html=True)
+        if st.button("← Terug naar overzicht", key=f"terug_{st.session_state.view}"):
+            st.session_state.view = "home"
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
-def _download_knop(df, prefix: str, key: str) -> None:
+def _download_blok(df, prefix: str, key: str) -> None:
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
     st.download_button(
-        label="⬇️ Download verrijkt Excel-bestand",
+        label="⬇️  Download verrijkt Excel-bestand",
         data=df_to_xlsx_bytes(df),
         file_name=f"{prefix}_{stamp}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key=key,
+        use_container_width=True,
     )
-    st.dataframe(df.head(25), use_container_width=True)
+    with st.expander("Voorbeeld van de output (eerste 25 rijen)"):
+        st.dataframe(df.head(25), use_container_width=True)
 
 
 # ---------------------------------------------------------------------------
-# Tab 1 — Nielsen opzoeken
+# Views
 # ---------------------------------------------------------------------------
-with tab_nielsen:
-    st.subheader("Nielsen opzoeken")
-    st.markdown(
-        "Zoekt ISBN's op in Nielsen BookData en levert het vaste "
-        "141-koloms format. **Let op:** Nielsen staat ±1000 nieuwe "
-        "opzoekingen per dag toe; eerder opgezochte ISBN's komen uit de "
-        "cache en tellen niet mee."
-    )
 
-    nl_file = st.file_uploader("Excel met ISBN's", type=["xlsx", "xls"], key="nl_upload")
+def view_home() -> None:
+    _brand_header("ISBN opzoeken")
+    col1, col2 = st.columns(2, gap="large")
 
+    with col1:
+        with st.container(key="card_nielsen"):
+            st.markdown(
+                """
+                <div class="pim-card-icon pim-icon-blauw">🌍</div>
+                <div class="pim-card-titel">Nielsen opzoeken</div>
+                <div class="pim-card-tekst">Internationale titels verrijken via
+                Nielsen BookData. Volledige metadata in het vaste
+                141&#8209;koloms format.</div>
+                <div class="pim-badges">
+                    <span class="pim-badge pim-badge-blauw">141 kolommen</span>
+                    <span class="pim-badge pim-badge-paars">1000 per dag</span>
+                    <span class="pim-badge pim-badge-groen">cache is gratis</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("Start met Nielsen  →", key="go_nielsen", use_container_width=True):
+                st.session_state.view = "nielsen"
+                st.rerun()
+
+    with col2:
+        with st.container(key="card_cb"):
+            st.markdown(
+                """
+                <div class="pim-card-icon pim-icon-oranje">📚</div>
+                <div class="pim-card-titel">CB opzoeken</div>
+                <div class="pim-card-tekst">Nederlandse en Vlaamse titels verrijken
+                via CB (Centraal Boekhuis). Alle CB&#8209;metadata plus grote
+                cover&#8209;URL in het 50&#8209;koloms format.</div>
+                <div class="pim-badges">
+                    <span class="pim-badge pim-badge-oranje">50 kolommen</span>
+                    <span class="pim-badge pim-badge-blauw">supersnel</span>
+                    <span class="pim-badge pim-badge-groen">incl. leverbaarheid</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("Start met CB  →", key="go_cb", use_container_width=True):
+                st.session_state.view = "cb"
+                st.rerun()
+
+
+def view_nielsen() -> None:
+    _brand_header("Nielsen opzoeken")
+    _terug_knop()
+
+    col_upload, col_info = st.columns([1.15, 1], gap="large")
+    with col_upload:
+        nl_file = st.file_uploader("Excel met ISBN's", type=["xlsx", "xls"], key="nl_upload")
+    rows = kolom = None
     if nl_file is not None:
         try:
-            nl_rows, nl_kolom = parse_upload(nl_file)
+            rows, kolom = parse_upload(nl_file)
         except UploadError as exc:
-            st.error(str(exc))
-        else:
-            nl_uniek = unique_valid_isbns(nl_rows)
-            cache_hits = nielsen_service.count_cache_hits(nl_uniek)
-            live_nodig = len(nl_uniek) - cache_hits
-            extra = f"Nielsen: **{cache_hits}** al in cache, **{live_nodig}** live op te halen."
+            with col_info:
+                st.error(str(exc))
+
+    if rows is not None:
+        uniek = unique_valid_isbns(rows)
+        geldig = [r for r in rows if r.isbn]
+        cache_hits = nielsen_service.count_cache_hits(uniek)
+        live_nodig = len(uniek) - cache_hits
+        with col_info:
+            _metric_tegels([
+                (f"{len(rows)}", "rijen", "m-paars"),
+                (f"{len(uniek)}", "unieke ISBN's", "m-blauw"),
+                (f"{cache_hits}", "uit cache", "m-groen"),
+                (f"{live_nodig}", "live nodig", "m-oranje"),
+            ])
             if live_nodig > 1000:
-                extra += (" ⚠️ Dat is meer dan het dagquotum (1000): een deel krijgt de "
-                          "status *dagquotum bereikt* en kan morgen opnieuw.")
-            _toon_upload_info(nl_rows, nl_kolom, extra)
+                st.warning("Meer dan het dagquotum (1000): een deel krijgt de status "
+                           "*dagquotum bereikt* en kan morgen opnieuw.")
+            if len(geldig) < len(rows):
+                st.caption(f"{len(rows) - len(geldig)} rij(en) zonder geldig ISBN — blokkeren niets. "
+                           f"Kolom: `{kolom}`")
+            with st.container(key="nl_actieblok"):
+                st.markdown('<div class="pim-actie">', unsafe_allow_html=True)
+                start = st.button("🚀  Start Nielsen-opzoeking", key="nl_start",
+                                  disabled=not uniek, use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
 
-            if st.button("Start Nielsen-opzoeking", type="primary", key="nl_start",
-                         disabled=not nl_uniek):
-                try:
-                    get_nielsen_credentials()  # vroege, duidelijke fout
-                except MissingSecretsError as exc:
-                    st.error(str(exc))
+        if start:
+            try:
+                get_nielsen_credentials()
+            except MissingSecretsError as exc:
+                st.error(str(exc))
+            else:
+                voortgang = st.progress(0.0, text="Nielsen-opzoeking gestart...")
+
+                def _nl_progress(done: int, total: int) -> None:
+                    voortgang.progress(done / total, text=f"Nielsen: {done}/{total} ISBN's verwerkt")
+
+                resultaat = nielsen_service.enrich(
+                    uniek, templates.NIELSEN_DATA_COLUMNS, progress_cb=_nl_progress)
+                voortgang.progress(1.0, text="Klaar")
+
+                for row in rows:
+                    if row.isbn:
+                        row.status = resultaat.status.get(row.isbn, STATUS_NOT_FOUND)
+                        row.opmerking = resultaat.opmerking.get(row.isbn, "")
+
+                bron = {isbn: "Nielsen" for isbn in resultaat.data}
+                df = build_output_df(rows, resultaat.data, templates.NIELSEN_COLUMNS,
+                                     templates.NIELSEN_ISBN_COL, bron)
+                st.session_state["nl_output"] = df
+
+                ok = sum(1 for r in rows if r.status in (STATUS_OK, STATUS_OK_CACHE))
+                melding = (f"Klaar: {ok} van {len(rows)} rijen met Nielsen-data "
+                           f"({resultaat.cache_hits} uit cache, {resultaat.live_fetches} live).")
+                if resultaat.quota_hit:
+                    st.warning(melding + " Dagquotum bereikt — de rest kan morgen opnieuw.")
                 else:
-                    voortgang = st.progress(0.0, text="Nielsen-opzoeking gestart...")
-
-                    def _nl_progress(done: int, total: int) -> None:
-                        voortgang.progress(done / total,
-                                           text=f"Nielsen: {done}/{total} ISBN's verwerkt")
-
-                    resultaat = nielsen_service.enrich(
-                        nl_uniek, templates.NIELSEN_DATA_COLUMNS, progress_cb=_nl_progress)
-                    voortgang.progress(1.0, text="Klaar")
-
-                    for row in nl_rows:
-                        if row.isbn:
-                            row.status = resultaat.status.get(row.isbn, STATUS_NOT_FOUND)
-                            row.opmerking = resultaat.opmerking.get(row.isbn, "")
-
-                    bron = {isbn: "Nielsen" for isbn in resultaat.data}
-                    df = build_output_df(nl_rows, resultaat.data,
-                                         templates.NIELSEN_COLUMNS,
-                                         templates.NIELSEN_ISBN_COL, bron)
-                    st.session_state["nl_output"] = df
-
-                    ok = sum(1 for r in nl_rows if r.status in (STATUS_OK, STATUS_OK_CACHE))
-                    melding = (f"Klaar: {ok} van {len(nl_rows)} rijen met Nielsen-data "
-                               f"({resultaat.cache_hits} uit cache, {resultaat.live_fetches} live).")
-                    if resultaat.quota_hit:
-                        st.warning(melding + " Het dagquotum is bereikt — de resterende "
-                                             "ISBN's staan gemarkeerd en kunnen morgen opnieuw.")
-                    else:
-                        st.success(melding)
+                    st.success(melding)
 
     if "nl_output" in st.session_state:
-        _download_knop(st.session_state["nl_output"], "nielsen_verrijkt", "nl_download")
+        _download_blok(st.session_state["nl_output"], "nielsen_verrijkt", "nl_download")
 
 
-# ---------------------------------------------------------------------------
-# Tab 2 — CB opzoeken
-# ---------------------------------------------------------------------------
-with tab_cb:
-    st.subheader("CB opzoeken")
-    st.markdown(
-        "Zoekt ISBN's op in CB Online (Centraal Boekhuis) en levert het "
-        "vaste 50-koloms format met alle CB-metadata én een grotere cover-URL "
-        "(ImageUrl_nieuw, uit hetzelfde Boekhuis-ecosysteem)."
-    )
+def view_cb() -> None:
+    _brand_header("CB opzoeken")
+    _terug_knop()
 
-    cb_file = st.file_uploader("Excel met ISBN's", type=["xlsx", "xls"], key="cb_upload")
-
+    col_upload, col_info = st.columns([1.15, 1], gap="large")
+    with col_upload:
+        cb_file = st.file_uploader("Excel met ISBN's", type=["xlsx", "xls"], key="cb_upload")
+    rows = kolom = None
     if cb_file is not None:
         try:
-            cb_rows, cb_kolom = parse_upload(cb_file)
+            rows, kolom = parse_upload(cb_file)
         except UploadError as exc:
-            st.error(str(exc))
-        else:
-            cb_uniek = unique_valid_isbns(cb_rows)
-            _toon_upload_info(cb_rows, cb_kolom)
+            with col_info:
+                st.error(str(exc))
 
-            if st.button("Start CB-opzoeking", type="primary", key="cb_start",
-                         disabled=not cb_uniek):
+    if rows is not None:
+        uniek = unique_valid_isbns(rows)
+        geldig = [r for r in rows if r.isbn]
+        with col_info:
+            _metric_tegels([
+                (f"{len(rows)}", "rijen", "m-paars"),
+                (f"{len(geldig)}", "geldige ISBN's", "m-groen"),
+                (f"{len(uniek)}", "unieke ISBN's", "m-oranje"),
+            ])
+            if len(geldig) < len(rows):
+                st.caption(f"{len(rows) - len(geldig)} rij(en) zonder geldig ISBN — blokkeren niets. "
+                           f"Kolom: `{kolom}`")
+            with st.container(key="cb_actieblok"):
+                st.markdown('<div class="pim-actie">', unsafe_allow_html=True)
+                start = st.button("🚀  Start CB-opzoeking", key="cb_start",
+                                  disabled=not uniek, use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+        if start:
+            try:
+                cfg = get_algolia_config()
+            except MissingSecretsError as exc:
+                st.error(str(exc))
+            else:
+                voortgang = st.progress(0.0, text="CB-opzoeking gestart...")
                 try:
-                    cfg = get_algolia_config()
-                except MissingSecretsError as exc:
+                    records = cb_service.fetch_cb_records(
+                        uniek, cfg,
+                        progress_cb=lambda b, t: voortgang.progress(
+                            min(b / t, 1.0), text=f"CB: batch {b}/{t}"))
+                except (cb_service.CBAuthError, cb_service.CBServiceError) as exc:
                     st.error(str(exc))
-                else:
-                    voortgang = st.progress(0.0, text="CB-opzoeking gestart...")
-                    try:
-                        records = cb_service.fetch_cb_records(
-                            cb_uniek, cfg,
-                            progress_cb=lambda b, t: voortgang.progress(
-                                min(b / t, 1.0), text=f"CB: batch {b}/{t}"))
-                    except (cb_service.CBAuthError, cb_service.CBServiceError) as exc:
-                        st.error(str(exc))
-                        records = None
+                    records = None
 
-                    if records is not None:
-                        gevonden = [i for i in cb_uniek if i in records]
-                        voortgang.progress(1.0, text="Klaar")
+                if records is not None:
+                    gevonden = [i for i in uniek if i in records]
+                    voortgang.progress(1.0, text="Klaar")
 
-                        data_by_isbn = {
-                            isbn: cb_service.build_cb_row(isbn, records[isbn])
-                            for isbn in gevonden
-                        }
-                        bron = {}
-                        for row in cb_rows:
-                            if not row.isbn:
-                                continue
-                            if row.isbn in records:
-                                row.status = STATUS_OK
-                                bron[row.isbn] = "CB"
-                            else:
-                                row.status = STATUS_NOT_FOUND
-                                row.opmerking = "ISBN niet bekend bij CB"
+                    data_by_isbn = {isbn: cb_service.build_cb_row(isbn, records[isbn])
+                                    for isbn in gevonden}
+                    bron = {}
+                    for row in rows:
+                        if not row.isbn:
+                            continue
+                        if row.isbn in records:
+                            row.status = STATUS_OK
+                            bron[row.isbn] = "CB"
+                        else:
+                            row.status = STATUS_NOT_FOUND
+                            row.opmerking = "ISBN niet bekend bij CB"
 
-                        df = build_output_df(cb_rows, data_by_isbn,
-                                             templates.CB_COLUMNS, templates.CB_ISBN_COL,
-                                             bron)
-                        st.session_state["cb_output"] = df
-                        st.success(f"Klaar: {len(gevonden)} van {len(cb_uniek)} unieke "
-                                   f"ISBN's gevonden bij CB.")
+                    df = build_output_df(rows, data_by_isbn, templates.CB_COLUMNS,
+                                         templates.CB_ISBN_COL, bron)
+                    st.session_state["cb_output"] = df
+                    st.success(f"Klaar: {len(gevonden)} van {len(uniek)} unieke ISBN's gevonden bij CB.")
 
     if "cb_output" in st.session_state:
-        _download_knop(st.session_state["cb_output"], "cb_verrijkt", "cb_download")
+        _download_blok(st.session_state["cb_output"], "cb_verrijkt", "cb_download")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+_require_password()
+_inject_css()
+
+if "view" not in st.session_state:
+    st.session_state.view = "home"
+
+if st.session_state.view == "nielsen":
+    view_nielsen()
+elif st.session_state.view == "cb":
+    view_cb()
+else:
+    view_home()
