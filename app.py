@@ -785,7 +785,11 @@ def _zoek_blok_cb() -> None:
 
 
 def _zoek_blok_nielsen() -> None:
-    """Resultaten van Nielsen: tegels, overzichtstabel en het 141-koloms bestand."""
+    """Resultaten van Nielsen: tegels en het volledige bestand.
+
+    Rendert bewust hetzelfde als het Nielsen-uploadtabblad, zodat vrij zoeken
+    en het opzoeken van een lijstje precies dezelfde output geven.
+    """
     df = st.session_state["zk_nl_output"]
     totaal = int(st.session_state.get("zk_nl_totaal", len(df)))
     getoond = len(df)
@@ -801,28 +805,18 @@ def _zoek_blok_nielsen() -> None:
                    "opgehaald; elke zoekopdracht telt mee met het dagquotum, dus "
                    "het aantal blijft bewust beperkt.")
 
-    # CNF1 bevat de volledige auteursnaam; CNS1 herhaalt diezelfde waarde.
-    kolommen = [templates.NIELSEN_ISBN_COL, "TL", "CNF1", "PUBN", "PUBPD",
-                "Leverbaarheid", "Leverbaarheid markt"]
-    labels = ["ISBN", "Titel", "Auteur", "Uitgever", "Verschijningsdatum",
-              "Leverbaarheid", "Markt"]
-    aanwezig = [(k, l) for k, l in zip(kolommen, labels) if k in df.columns]
-    preview = df[[k for k, _ in aanwezig]].copy()
-    preview.columns = [l for _, l in aanwezig]
-    st.dataframe(
-        preview, use_container_width=True, hide_index=True, height=420,
-        column_config={
-            "ISBN": st.column_config.TextColumn("ISBN", width="medium"),
-            "Titel": st.column_config.TextColumn("Titel", width="large"),
-            "Markt": st.column_config.TextColumn("Markt", width="small"),
-        },
-    )
+    # BEWUST GEEN verkorte overzichtstabel hier. Die stond er eerst wel, maar
+    # Streamlit zet in de tabelbalk een eigen downloadknop die alleen de
+    # zichtbare kolommen wegschrijft. Dat leverde een CSV met vijf kolommen op,
+    # terwijl de echte download eronder het volledige 141-koloms bestand geeft.
+    # Zonder die tabel is er nog maar een downloadpad en is vrij zoeken exact
+    # hetzelfde als het opzoeken van een lijstje.
     if "Leverbaarheid markt" in df.columns:
         leeg = int((df["Leverbaarheid markt"] == "").sum())
         st.caption(
             "Leverbaarheid komt van Nielsen zelf. Europa gaat voor; staat daar "
-            "niets bruikbaars, dan tonen we de Britse of Amerikaanse markt, en "
-            "de kolom Markt zegt welke het is."
+            "niets bruikbaars, dan gebruiken we de Britse of Amerikaanse markt. "
+            "De kolom 'Leverbaarheid markt' in het bestand zegt welke het is."
             + (f" Voor {leeg} titel(s) geeft Nielsen geen leverbaarheid." if leeg else "")
         )
     _resultaat_blok(df, "nielsen_zoekresultaat", "zknl")
