@@ -340,3 +340,125 @@ def zoek(term: str, target_columns: list[str], max_results: int = 25,
     result.volgorde = result.volgorde[:max_results]
     result.data = {i: result.data[i] for i in result.volgorde}
     return result
+
+
+# ---------------------------------------------------------------------------
+# Leverbaarheid
+# ---------------------------------------------------------------------------
+
+# Nielsen levert leverbaarheid per afzetmarkt als code plus Engelse tekst:
+#   EURNBDPAC / EURNBDPAT  (Europa)
+#   UKNBDPAC  / UKNBDPAT   (Verenigd Koninkrijk)
+#   USNBDPAC  / USNBDPAT   (Verenigde Staten)
+# Die velden zitten al in het 141-koloms template; wat hier bijkomt is een
+# leesbare, genormaliseerde kolom.
+#
+# De codes volgen ONIX-codelijst 65. Vastgesteld op 08-09-2026 tegen 4163
+# gecachte records plus een live controlecall:
+#   - de koppeling code -> tekst was in alle gevallen consistent
+#   - dekking: EUR 50,7%, UK 89,5%, US 77,6%
+#   - 92,0% heeft minstens een van de drie, 8,0% heeft helemaal geen waarde
+#
+# EUR is voor Intertaal de relevante markt, maar bij de helft van de titels
+# leeg. Daarom vallen we terug op UK en daarna US, en zetten we er ALTIJD bij
+# uit welke markt de waarde komt. Waar EUR en UK allebei gevuld zijn, geven ze
+# in 88,3% dezelfde strekking; het verschil zit vooral in EUR-code 97 (geen
+# recente update), niet in echte tegenspraak. Bij 2,0% spreken ze elkaar wel
+# echt tegen, en juist daarom staat de markt er zichtbaar bij.
+
+LEVERBAARHEID_REGIOS = (
+    ("EUR", "EURNBDPAC", "EURNBDPAT"),
+    ("UK", "UKNBDPAC", "UKNBDPAT"),
+    ("US", "USNBDPAC", "USNBDPAT"),
+)
+
+# Nederlandse labels bij ONIX-codelijst 65. De codes met (*) kwamen in de
+# steekproef daadwerkelijk voor; de overige komen uit de standaard en staan
+# erbij zodat er nooit een kale code in beeld komt.
+LEVERBAARHEID_LABELS = {
+    "01": "Geannuleerd",                                                # *
+    "10": "Nog niet verschenen",                                        # *
+    "11": "Wacht op voorraad",
+    "12": "Nog niet leverbaar, wordt print-on-demand",
+    "20": "Leverbaar",                                                  # *
+    "21": "Op voorraad",                                                # *
+    "22": "Op bestelling",                                              # *
+    "23": "Print-on-demand",                                            # *
+    "30": "Tijdelijk niet leverbaar",                                   # *
+    "31": "Niet op voorraad",                                           # *
+    "32": "Wordt herdrukt",                                             # *
+    "33": "Wacht op heruitgave",
+    "34": "Tijdelijk uit de verkoop",                                   # *
+    "40": "Niet leverbaar, reden onbekend",                             # *
+    "41": "Niet leverbaar, vervangen door nieuw product",               # *
+    "42": "Niet leverbaar, ander formaat wel",
+    "43": "Niet meer geleverd door de leverancier",                     # *
+    "44": "Rechtstreeks bij de uitgever bestellen",
+    "45": "Niet los verkrijgbaar",                                      # *
+    "46": "Uit de verkoop genomen",                                     # *
+    "47": "Restpartij",
+    "48": "Niet leverbaar, vervangen door print-on-demand",
+    "49": "Teruggeroepen",
+    "50": "Niet als set verkocht",
+    "51": "Niet leverbaar, uitgever meldt uitverkocht",                 # *
+    "52": "Niet leverbaar, uitgever verkoopt niet meer in deze markt",  # *
+    "97": "Geen recente update ontvangen",                              # *
+    "98": "Geen updates meer",
+    "99": "Neem contact op met de leverancier",                         # *
+}
+
+# Codes die betekenen dat de titel te krijgen is. Print-on-demand (23) telt
+# mee: dat is leverbaar, alleen met een langere levertijd.
+LEVERBAAR_CODES = {"20", "21", "22", "23"}
+# Codes die betekenen dat de titel niet te krijgen is. 97, 98 en 99 staan
+# bewust in geen van beide sets: die zeggen iets over de dataleverancier, niet
+# over de beschikbaarheid van het boek.
+NIET_LEVERBAAR_CODES = {"01", "10", "11", "12", "30", "31", "32", "33", "34",
+                        "40", "41", "42", "43", "44", "45", "46", "47", "48",
+                        "49", "50", "51", "52"}
+
+
+# 97 en 98 zeggen niets over het boek maar over de datafeed van die markt
+# ("geen recente update", "geen updates meer"). In de steekproef stond bij 191
+# titels EUR op 97 terwijl UK gewoon 'In stock' meldde. Zo'n code laten winnen
+# van een echt signaal uit een andere markt maakt de kolom onbruikbaar, dus
+# zoeken we eerst door naar een markt die wel iets over het boek zegt.
+GEEN_SIGNAAL_CODES = {"97", "98"}
+
+
+def _label(code: str, velden: dict[str, str], tekst_veld: str) -> str:
+    """Nederlands label; valt terug op Nielsens eigen Engelse tekst."""
+    tekst = LEVERBAARHEID_LABELS.get(code) or str(velden.get(tekst_veld) or "").strip()
+    return tekst or f"Code {code}"
+
+
+def leverbaarheid(velden: dict[str, str]) -> tuple[str, str, str]:
+    """Leid de leverbaarheid af uit een Nielsen-record.
+
+    Returnt (tekst, code, markt). Volgorde van voorkeur: EUR, dan UK, dan US.
+    Markten waarvan de code alleen iets over de datafeed zegt (97, 98) worden
+    in de eerste ronde overgeslagen; komt er nergens een echt signaal, dan
+    tonen we die code alsnog in plaats van een leeg veld. Zonder enige waarde:
+    ("", "", "").
+    """
+    # Ronde 1: een markt met een echt signaal over het boek.
+    for markt, code_veld, tekst_veld in LEVERBAARHEID_REGIOS:
+        code = str(velden.get(code_veld) or "").strip()
+        if code and code not in GEEN_SIGNAAL_CODES:
+            return (_label(code, velden, tekst_veld), code, markt)
+    # Ronde 2: geen enkel echt signaal; toon wat er wel staat.
+    for markt, code_veld, tekst_veld in LEVERBAARHEID_REGIOS:
+        code = str(velden.get(code_veld) or "").strip()
+        if code:
+            return (_label(code, velden, tekst_veld), code, markt)
+    return ("", "", "")
+
+
+def is_leverbaar(code: str) -> str:
+    """'ja', 'nee' of 'onbekend' bij een ONIX-beschikbaarheidscode."""
+    code = str(code or "").strip()
+    if code in LEVERBAAR_CODES:
+        return "ja"
+    if code in NIET_LEVERBAAR_CODES:
+        return "nee"
+    return "onbekend"

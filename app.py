@@ -553,8 +553,9 @@ def view_nielsen() -> None:
                         row.opmerking = resultaat.opmerking.get(row.isbn, "")
 
                 bron = {isbn: "Nielsen" for isbn in resultaat.data}
-                df = build_output_df(rows, resultaat.data, templates.NIELSEN_COLUMNS,
-                                     templates.NIELSEN_ISBN_COL, bron)
+                df = _nielsen_leverbaarheid(
+                    build_output_df(rows, resultaat.data, templates.NIELSEN_COLUMNS,
+                                    templates.NIELSEN_ISBN_COL, bron))
                 st.session_state["nl_output"] = df
 
                 ok = sum(1 for r in rows if r.status in (STATUS_OK, STATUS_OK_CACHE))
@@ -644,6 +645,29 @@ def view_cb() -> None:
         _resultaat_blok(st.session_state["cb_output"], "cb_verrijkt", "cb")
 
 
+def _nielsen_leverbaarheid(df):
+    """Zet leesbare leverbaarheidskolommen achter Status en Bron.
+
+    De ruwe codes (EURNBDPAC, UKNBDPAC, USNBDPAC met bijbehorende teksten)
+    zitten al in het 141-koloms template. Deze kolommen laten dat template
+    ongemoeid en maken de gegevens alleen bruikbaar: een Nederlandse tekst,
+    een ja/nee/onbekend om op te filteren, en de markt waar de waarde vandaan
+    komt. Die markt staat er bewust bij, want bij ongeveer de helft van de
+    titels is er geen Europese waarde en vallen we terug op UK of US.
+    """
+    velden = ["EURNBDPAC", "EURNBDPAT", "UKNBDPAC", "UKNBDPAT",
+              "USNBDPAC", "USNBDPAT"]
+    aanwezig = [v for v in velden if v in df.columns]
+    if df.empty or not aanwezig:
+        return df
+    afgeleid = [nielsen_service.leverbaarheid(rij)
+                for rij in df[aanwezig].to_dict(orient="records")]
+    df["Leverbaarheid"] = [t for t, _, _ in afgeleid]
+    df["Leverbaar"] = [nielsen_service.is_leverbaar(c) for _, c, _ in afgeleid]
+    df["Leverbaarheid markt"] = [m for _, _, m in afgeleid]
+    return df
+
+
 def _zoek_wissen() -> None:
     """Oude zoekresultaten weggooien voor een nieuwe zoekopdracht."""
     for sleutel in ("zk_cb_output", "zk_cb_totaal", "zk_nl_output",
@@ -716,10 +740,10 @@ def _zoek_nielsen(term: str, maximum: int) -> str | None:
     if not resultaat.volgorde:
         return None
 
-    st.session_state["zk_nl_output"] = build_output_df(
+    st.session_state["zk_nl_output"] = _nielsen_leverbaarheid(build_output_df(
         rows_from_isbns(resultaat.volgorde), resultaat.data,
         templates.NIELSEN_COLUMNS, templates.NIELSEN_ISBN_COL,
-        {isbn: "Nielsen" for isbn in resultaat.volgorde})
+        {isbn: "Nielsen" for isbn in resultaat.volgorde}))
     st.session_state["zk_nl_totaal"] = resultaat.hits
     return None
 
@@ -767,18 +791,21 @@ def _zoek_blok_nielsen() -> None:
     getoond = len(df)
 
     st.markdown("#### Gevonden bij Nielsen")
-    _metric_tegels([
-        (f"{totaal}", "treffers bij Nielsen", "m-blauw"),
-        (f"{getoond}", "opgehaald", "m-paars"),
-    ])
+    tegels = [(f"{totaal}", "treffers bij Nielsen", "m-blauw"),
+              (f"{getoond}", "opgehaald", "m-paars")]
+    if "Leverbaar" in df.columns:
+        tegels.append((f"{int((df['Leverbaar'] == 'ja').sum())}", "leverbaar", "m-groen"))
+    _metric_tegels(tegels)
     if totaal > getoond:
         st.caption(f"Nielsen heeft {totaal} treffers. Daarvan zijn er {getoond} "
                    "opgehaald; elke zoekopdracht telt mee met het dagquotum, dus "
                    "het aantal blijft bewust beperkt.")
 
     # CNF1 bevat de volledige auteursnaam; CNS1 herhaalt diezelfde waarde.
-    kolommen = [templates.NIELSEN_ISBN_COL, "TL", "CNF1", "PUBN", "PUBPD"]
-    labels = ["ISBN", "Titel", "Auteur", "Uitgever", "Verschijningsdatum"]
+    kolommen = [templates.NIELSEN_ISBN_COL, "TL", "CNF1", "PUBN", "PUBPD",
+                "Leverbaarheid", "Leverbaarheid markt"]
+    labels = ["ISBN", "Titel", "Auteur", "Uitgever", "Verschijningsdatum",
+              "Leverbaarheid", "Markt"]
     aanwezig = [(k, l) for k, l in zip(kolommen, labels) if k in df.columns]
     preview = df[[k for k, _ in aanwezig]].copy()
     preview.columns = [l for _, l in aanwezig]
@@ -787,8 +814,17 @@ def _zoek_blok_nielsen() -> None:
         column_config={
             "ISBN": st.column_config.TextColumn("ISBN", width="medium"),
             "Titel": st.column_config.TextColumn("Titel", width="large"),
+            "Markt": st.column_config.TextColumn("Markt", width="small"),
         },
     )
+    if "Leverbaarheid markt" in df.columns:
+        leeg = int((df["Leverbaarheid markt"] == "").sum())
+        st.caption(
+            "Leverbaarheid komt van Nielsen zelf. Europa gaat voor; staat daar "
+            "niets bruikbaars, dan tonen we de Britse of Amerikaanse markt, en "
+            "de kolom Markt zegt welke het is."
+            + (f" Voor {leeg} titel(s) geeft Nielsen geen leverbaarheid." if leeg else "")
+        )
     _resultaat_blok(df, "nielsen_zoekresultaat", "zknl")
 
 
