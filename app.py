@@ -81,8 +81,16 @@ html, body, [class*="css"], .stMarkdown, button, input {
     margin-bottom: 1.4rem;
 }
 .pim-header img { height: 46px; }
+/* Kleur bewust GEERFD van Streamlits thema, niet hardgecodeerd.
+   Deze titel staat als enige tekst direct op de app-achtergrond (de kaarten
+   hebben hun eigen witte vlak). Met een vaste #1a1a1a was hij in donkere modus
+   onleesbaar: contrast 1.09:1 op de donkere achtergrond #0e1117.
+   Streamlit zet de tekstkleur van body per thema (#31333f licht, #fafafa
+   donker), dus 'inherit' geeft in beide thema's maximaal contrast.
+   Let op: .streamlit/config.toml (base = "light") staat NIET in de
+   deploy-whitelist, dus op Azure volgt het thema de browserinstelling. */
 .pim-header .pim-title {
-    font-size: 1.5rem; font-weight: 700; color: #1a1a1a; letter-spacing: -.02em;
+    font-size: 1.5rem; font-weight: 700; color: inherit; letter-spacing: -.02em;
 }
 .pim-header .pim-title span { color: var(--it-oranje); }
 .pim-header .pim-sub {
