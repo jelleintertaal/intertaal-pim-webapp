@@ -86,7 +86,7 @@ html, body, [class*="css"], .stMarkdown, button, input {
 }
 .pim-header .pim-title span { color: var(--it-oranje); }
 .pim-header .pim-sub {
-    margin-left: auto; color: #6a7175; font-size: .95rem; font-weight: 500;
+    margin-left: auto; color: var(--it-oranje); font-size: .95rem; font-weight: 700;
 }
 
 /* ------- Grote keuzekaarten (home) ------- */
@@ -103,6 +103,31 @@ div[class*="st-key-card_"] {
 /* Drie kaarten naast elkaar: iets compacter zodat ze in 1 viewport passen. */
 @media (min-width: 900px) {
     div[class*="st-key-card_"] { padding: 2rem 1.7rem 1.5rem 1.7rem; min-height: 415px; }
+}
+
+/* ------- Kaarten even hoog, knoppen op één lijn -------
+   De kaartteksten en badges wikkelen over verschillend veel regels, waardoor
+   de kaarten anders hoog werden (435 / 460 / 500 px) en de knoppen op drie
+   verschillende hoogtes stonden. De kolom rekt al mee; alleen Streamlits
+   tussenwrapper deed dat niet. Die stretchen we, de kaart vult hem, en de
+   knop wordt met margin-top:auto naar de onderkant geduwd.
+   De min-height hierboven blijft als terugval als Streamlit ooit andere
+   data-testid's gebruikt. */
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] {
+    flex: 1 1 auto;
+    height: 100%;
+}
+div[class*="st-key-card_"] {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+/* Streamlit zet om elk element een stElementContainer; dat zijn de echte
+   flex-kinderen van de kaart. De margin-top moet daar staan, niet op de knop
+   zelf, anders gebeurt er niets. */
+div[class*="st-key-card_"] > [data-testid="stElementContainer"]:last-child {
+    margin-top: auto;
+    width: 100%;
 }
 div[class*="st-key-card_"]::before {
     content: ""; position: absolute; top: 0; left: 0; right: 0; height: 7px;
