@@ -45,7 +45,7 @@ def build_output_df(
             record[isbn_col_name] = row.isbn
         record[STATUS_COL] = row.status
         if row.opmerking and row.status and row.opmerking not in row.status:
-            record[STATUS_COL] = f"{row.status} — {row.opmerking}"
+            record[STATUS_COL] = f"{row.status}: {row.opmerking}"
         record[BRON_COL] = bron_by_isbn.get(row.isbn or "", "")
         records.append(record)
 

@@ -195,3 +195,148 @@ def enrich(isbns: list[str], target_columns: list[str],
     if new_nielsen_records and turso_cache.is_enabled():
         turso_cache.upsert_nielsen(new_nielsen_records)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Vrij zoeken bij Nielsen (tab 3)
+# ---------------------------------------------------------------------------
+
+# Veldcodes van de BDOL-zoek-API. Deze staan NIET in de leveranciers-
+# documentatie en zijn op 08-09-2026 empirisch vastgesteld tegen de live API:
+#   1 = ISBN        2 = titel        3 = auteur/betrokkene
+# Veldcode 4 gaf inconsistente treffers en wordt bewust niet gebruikt.
+FIELD_ISBN = 1
+FIELD_TITEL = 2
+FIELD_AUTEUR = 3
+
+# Elke zoekopdracht kost quotum, dus standaard klein houden.
+SEARCH_MAX_RESULTS = 100
+
+
+@dataclass
+class NielsenSearchResult:
+    data: dict[str, dict[str, str]] = field(default_factory=dict)   # isbn -> {kolom: waarde}
+    volgorde: list[str] = field(default_factory=list)               # isbns op relevantievolgorde
+    hits: int = 0                                                   # totaal bij Nielsen
+    quota_hit: bool = False
+    bron_down: bool = False
+
+
+def parse_nielsen_records(xml: str, target_columns: list[str]) -> list[tuple[str, dict[str, str]]]:
+    """Parse ALLE records uit een zoekrespons (parse_nielsen doet alleen de eerste).
+
+    Returnt [(isbn, {kolom: waarde}), ...] op de volgorde die Nielsen teruggeeft.
+    """
+    uit: list[tuple[str, dict[str, str]]] = []
+    for rec in re.findall(r"<record>(.*?)</record>", xml or "", re.DOTALL):
+        m = re.search(r"<ISBN13>([^<]*)</ISBN13>", rec)
+        isbn = (m.group(1).strip() if m else "")
+        if not isbn:
+            continue
+        waarden: dict[str, str] = {}
+        for col in target_columns:
+            mm = re.search(rf"<{re.escape(col)}>([^<]*)</{re.escape(col)}>", rec)
+            if mm and mm.group(1).strip():
+                waarden[col] = mm.group(1).strip()
+        if waarden:
+            uit.append((isbn, waarden))
+    return uit
+
+
+def _hits_uit_xml(xml: str) -> int:
+    m = re.search(r"<hits>(\d+)</hits>", xml or "")
+    return int(m.group(1)) if m else 0
+
+
+def zoek(term: str, target_columns: list[str], max_results: int = 25,
+         progress_cb: Callable[[int, int], None] | None = None) -> NielsenSearchResult:
+    """Vrije zoekopdracht bij Nielsen op titel en auteur, of exact op ISBN.
+
+    Een geldig ISBN-13 gaat via veldcode 1. Elke andere term wordt zowel op
+    titel (2) als op auteur (3) gezocht; de resultaten worden samengevoegd met
+    de titeltreffers eerst en dubbele ISBN's eruit.
+
+    LET OP: elke call telt mee met het dagquotum van 1000. Daarom één call per
+    veld, geen paginering.
+    """
+    from src.app_services import templates
+    from src.app_services.validation import looks_like_isbn13
+
+    result = NielsenSearchResult()
+    term = (term or "").strip()
+    if not term:
+        return result
+
+    max_results = max(1, min(int(max_results), SEARCH_MAX_RESULTS))
+    isbn = looks_like_isbn13(term)
+    velden = [FIELD_ISBN] if isbn else [FIELD_TITEL, FIELD_AUTEUR]
+    zoekwaarde = isbn or term
+
+    client_id, password = get_nielsen_credentials()
+    api_url = get_nielsen_api_url()
+    session = requests.Session()
+
+    nieuwe_xml: dict[str, str] = {}
+    nieuwe_records: dict[str, dict[str, str]] = {}
+
+    for nr, veld in enumerate(velden, start=1):
+        if progress_cb:
+            progress_cb(nr, len(velden))
+        params = {
+            "clientId": client_id, "password": password,
+            "from": 0, "to": max_results,
+            "indexType": 0, "format": 7, "resultView": 2,
+            "field0": veld, "value0": zoekwaarde, "logic0": 0,
+        }
+        try:
+            resp = session.get(api_url, params=params, timeout=REQUEST_TIMEOUT)
+        except requests.RequestException:
+            result.bron_down = True
+            continue
+
+        if resp.status_code in (403, 429):
+            result.quota_hit = True
+            break
+        if resp.status_code >= 400:
+            result.bron_down = True
+            continue
+
+        tekst = resp.text
+        lowered = tekst.lower()
+        if any(t in lowered for t in ("quota exceeded", "daily limit", "credits exhausted")) \
+                or "<resultCode>50</resultCode>" in tekst:
+            result.quota_hit = True
+            break
+
+        result.hits = max(result.hits, _hits_uit_xml(tekst))
+
+        for gevonden_isbn, waarden in parse_nielsen_records(tekst, target_columns):
+            if gevonden_isbn not in result.data:
+                result.data[gevonden_isbn] = waarden
+                result.volgorde.append(gevonden_isbn)
+
+        # Records uit een zoekopdracht zijn veldidentiek aan een directe
+        # ISBN-lookup (geverifieerd), dus ze mogen de cache in. Dat scheelt
+        # later quotum bij het verrijken van diezelfde ISBN's.
+        for rec in re.findall(r"<record>(.*?)</record>", tekst, re.DOTALL):
+            m = re.search(r"<ISBN13>([^<]*)</ISBN13>", rec)
+            if not m:
+                continue
+            rec_isbn = m.group(1).strip()
+            if rec_isbn:
+                nieuwe_xml[rec_isbn] = f"<record>{rec}</record>"
+                volledig = parse_nielsen(f"<record>{rec}</record>", templates.NIELSEN_DATA_COLUMNS)
+                if volledig:
+                    nieuwe_records[rec_isbn] = volledig
+
+        if len(velden) > 1 and nr < len(velden):
+            time.sleep(RATE_LIMIT_SECONDS)
+
+    if nieuwe_xml:
+        caches.save_json_cache(caches.NIELSEN_CACHE, nieuwe_xml)
+    if nieuwe_records and turso_cache.is_enabled():
+        turso_cache.upsert_nielsen(nieuwe_records)
+
+    result.volgorde = result.volgorde[:max_results]
+    result.data = {i: result.data[i] for i in result.volgorde}
+    return result

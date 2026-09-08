@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Intertaal PIM — ISBN opzoektool (Nielsen + CB), in Intertaal-huisstijl.
+Intertaal PIM: ISBN opzoektool (Nielsen + CB), in Intertaal-huisstijl.
 
-Views (st.session_state.view): home -> nielsen | cb.
+Views (st.session_state.view): home -> nielsen | cb | zoeken.
 Zelfde flow als voorheen per tool: Excel uploaden -> ISBNs valideren ->
 bron bevragen -> Excel downloaden in het vaste template-format.
 
@@ -342,7 +342,7 @@ def _require_password() -> None:
     _inject_css()
     st.markdown(
         f"""<div class="pim-login"><img src="{LOGO_URL}" alt="Intertaal"/>
-        <div style="font-size:1.25rem;font-weight:700;margin-bottom:.3rem;">PIM &mdash; ISBN opzoeken</div>
+        <div style="font-size:1.25rem;font-weight:700;margin-bottom:.3rem;">PIM: ISBN opzoeken</div>
         <div style="color:#6a7175;font-size:.95rem;margin-bottom:.6rem;">
         Alleen voor Intertaal-medewerkers.</div></div>""",
         unsafe_allow_html=True,
@@ -385,8 +385,8 @@ def _resultaat_blok(df, prefix: str, key_prefix: str) -> None:
     """
     with st.expander("✏️  Output bekijken & bewerken", expanded=False):
         st.caption(
-            "Pas velden direct aan in de tabel. De download — en straks de "
-            "publicatie naar Exact — gebruiken jouw bewerkte versie."
+            "Pas velden direct aan in de tabel. De download gebruikt jouw "
+            "bewerkte versie, en straks geldt dat ook voor de publicatie naar Exact."
         )
         edited = st.data_editor(
             df, use_container_width=True, height=420,
@@ -477,13 +477,13 @@ def view_home() -> None:
                 """
                 <div class="pim-card-icon pim-icon-paars">🔎</div>
                 <div class="pim-card-titel">Vrij zoeken</div>
-                <div class="pim-card-tekst">Zoek in de CB&#8209;catalogus op auteur,
-                titel of ISBN &mdash; zonder bestand. Alle treffers meteen in beeld,
-                met cover en leverbaarheid.</div>
+                <div class="pim-card-tekst">Zoek op auteur, titel of ISBN zonder
+                een bestand te uploaden. Je kiest zelf of je bij CB zoekt, bij
+                Nielsen, of bij allebei tegelijk.</div>
                 <div class="pim-badges">
                     <span class="pim-badge pim-badge-paars">geen upload nodig</span>
-                    <span class="pim-badge pim-badge-blauw">auteur &middot; titel &middot; ISBN</span>
-                    <span class="pim-badge pim-badge-groen">zelfde 50 kolommen</span>
+                    <span class="pim-badge pim-badge-blauw">auteur, titel of ISBN</span>
+                    <span class="pim-badge pim-badge-groen">CB en/of Nielsen</span>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -524,7 +524,7 @@ def view_nielsen() -> None:
                 st.warning("Meer dan het dagquotum (1000): een deel krijgt de status "
                            "*dagquotum bereikt* en kan morgen opnieuw.")
             if len(geldig) < len(rows):
-                st.caption(f"{len(rows) - len(geldig)} rij(en) zonder geldig ISBN — blokkeren niets. "
+                st.caption(f"{len(rows) - len(geldig)} rij(en) zonder geldig ISBN. Die blokkeren niets. "
                            f"Kolom: `{kolom}`")
             with st.container(key="nl_actieblok"):
                 st.markdown('<div class="pim-actie">', unsafe_allow_html=True)
@@ -561,7 +561,7 @@ def view_nielsen() -> None:
                 melding = (f"Klaar: {ok} van {len(rows)} rijen met Nielsen-data "
                            f"({resultaat.cache_hits} uit cache, {resultaat.live_fetches} live).")
                 if resultaat.quota_hit:
-                    st.warning(melding + " Dagquotum bereikt — de rest kan morgen opnieuw.")
+                    st.warning(melding + " Dagquotum bereikt. De rest kan morgen opnieuw.")
                 else:
                     st.success(melding)
 
@@ -594,7 +594,7 @@ def view_cb() -> None:
                 (f"{len(uniek)}", "unieke ISBN's", "m-oranje"),
             ])
             if len(geldig) < len(rows):
-                st.caption(f"{len(rows) - len(geldig)} rij(en) zonder geldig ISBN — blokkeren niets. "
+                st.caption(f"{len(rows) - len(geldig)} rij(en) zonder geldig ISBN. Die blokkeren niets. "
                            f"Kolom: `{kolom}`")
             with st.container(key="cb_actieblok"):
                 st.markdown('<div class="pim-actie">', unsafe_allow_html=True)
@@ -644,29 +644,39 @@ def view_cb() -> None:
         _resultaat_blok(st.session_state["cb_output"], "cb_verrijkt", "cb")
 
 
-def _zoek_uitvoeren(term: str, cfg, maximum: int) -> None:
-    """Voer de zoekopdracht uit en zet het resultaat in de sessie.
+def _zoek_wissen() -> None:
+    """Oude zoekresultaten weggooien voor een nieuwe zoekopdracht."""
+    for sleutel in ("zk_cb_output", "zk_cb_totaal", "zk_nl_output",
+                    "zk_nl_totaal", "zk_nl_quota", "zk_nl_down"):
+        st.session_state.pop(sleutel, None)
 
-    Een geldig ISBN-13 gaat via de exacte objectID-lookup (preciezer en
-    sneller); al het andere via de Algolia full-text zoekopdracht.
+
+def _zoek_cb(term: str, maximum: int) -> str | None:
+    """Zoek bij CB. Returnt een foutmelding, of None als het goed ging.
+
+    Een geldig ISBN-13 gaat via de exacte objectID-lookup, elke andere term via
+    de Algolia-zoekopdracht met CB's eigen relevantievolgorde.
     """
+    try:
+        cfg = get_algolia_config()
+    except MissingSecretsError as exc:
+        return str(exc)
+
     isbn = looks_like_isbn13(term)
     voortgang = st.progress(0.0, text="Zoeken bij CB...")
     try:
         if isbn:
-            gevonden = cb_service.fetch_cb_records([isbn], cfg)
-            records = list(gevonden.values())
+            records = list(cb_service.fetch_cb_records([isbn], cfg).values())
             totaal = len(records)
         else:
             records, totaal = cb_service.search_cb_records(
                 term, cfg, max_results=maximum,
                 progress_cb=lambda p, t: voortgang.progress(
-                    min(p / t, 1.0), text=f"CB: pagina {p}/{t}"),
+                    min(p / t, 1.0), text=f"CB: pagina {p} van {t}"),
             )
     except (cb_service.CBAuthError, cb_service.CBServiceError) as exc:
         voortgang.empty()
-        st.error(str(exc))
-        return
+        return str(exc)
     voortgang.empty()
 
     paren = []
@@ -674,52 +684,69 @@ def _zoek_uitvoeren(term: str, cfg, maximum: int) -> None:
         oid = str(record.get("objectID") or record.get("Isbn") or "").strip()
         if oid:
             paren.append((oid, record))
-
     if not paren:
-        for sleutel in ("zk_output", "zk_totaal", "zk_term_gebruikt"):
-            st.session_state.pop(sleutel, None)
-        st.warning(
-            f"Geen resultaten voor “{term}”. Probeer een kortere of andere "
-            "zoekterm — bijvoorbeeld alleen de achternaam van de auteur."
-        )
-        return
+        return None
 
     isbns = [oid for oid, _ in paren]
     data_by_isbn = {oid: cb_service.build_cb_row(oid, record) for oid, record in paren}
-    df = build_output_df(rows_from_isbns(isbns), data_by_isbn,
-                         templates.CB_COLUMNS, templates.CB_ISBN_COL,
-                         {oid: "CB" for oid in isbns})
-
-    st.session_state["zk_output"] = df
-    st.session_state["zk_totaal"] = totaal
-    st.session_state["zk_term_gebruikt"] = term
+    st.session_state["zk_cb_output"] = build_output_df(
+        rows_from_isbns(isbns), data_by_isbn, templates.CB_COLUMNS,
+        templates.CB_ISBN_COL, {oid: "CB" for oid in isbns})
+    st.session_state["zk_cb_totaal"] = totaal
+    return None
 
 
-def _zoek_resultaten_tonen() -> None:
-    df = st.session_state["zk_output"]
-    totaal = int(st.session_state.get("zk_totaal", len(df)))
+def _zoek_nielsen(term: str, maximum: int) -> str | None:
+    """Zoek bij Nielsen. Returnt een foutmelding, of None als het goed ging."""
+    try:
+        get_nielsen_credentials()
+    except MissingSecretsError as exc:
+        return str(exc)
+
+    voortgang = st.progress(0.0, text="Zoeken bij Nielsen...")
+    resultaat = nielsen_service.zoek(
+        term, templates.NIELSEN_DATA_COLUMNS, max_results=maximum,
+        progress_cb=lambda p, t: voortgang.progress(
+            min(p / t, 1.0), text=f"Nielsen: zoekslag {p} van {t}"),
+    )
+    voortgang.empty()
+
+    st.session_state["zk_nl_quota"] = resultaat.quota_hit
+    st.session_state["zk_nl_down"] = resultaat.bron_down
+    if not resultaat.volgorde:
+        return None
+
+    st.session_state["zk_nl_output"] = build_output_df(
+        rows_from_isbns(resultaat.volgorde), resultaat.data,
+        templates.NIELSEN_COLUMNS, templates.NIELSEN_ISBN_COL,
+        {isbn: "Nielsen" for isbn in resultaat.volgorde})
+    st.session_state["zk_nl_totaal"] = resultaat.hits
+    return None
+
+
+def _zoek_blok_cb() -> None:
+    """Resultaten van CB: tegels, overzichtstabel en het 50-koloms bestand."""
+    df = st.session_state["zk_cb_output"]
+    totaal = int(st.session_state.get("zk_cb_totaal", len(df)))
     getoond = len(df)
     codes = df["BeschikbaarheidsCode"].astype(str).str.strip()
-    leverbaar = int((codes == "1").sum())
 
+    st.markdown("#### Gevonden bij CB")
     _metric_tegels([
-        (f"{totaal}", "treffers bij CB", "m-paars"),
+        (f"{totaal}", "treffers bij CB", "m-oranje"),
         (f"{getoond}", "opgehaald", "m-blauw"),
-        (f"{leverbaar}", "direct leverbaar", "m-oranje"),
+        (f"{int((codes == '1').sum())}", "direct leverbaar", "m-groen"),
     ])
     if totaal > getoond:
-        st.caption(
-            f"CB heeft {totaal} treffers; de {getoond} meest relevante zijn opgehaald. "
-            "Verhoog 'max. resultaten' of maak de zoekterm specifieker."
-        )
+        st.caption(f"CB heeft {totaal} treffers. De {getoond} meest relevante zijn "
+                   "opgehaald; verhoog 'max. resultaten' of maak de zoekterm specifieker.")
 
     preview = df[["Isbn", "Hoofdtitel", "Auteur", "Uitgever",
                   "Verschijningsjaar", "Prijs"]].copy()
     preview.insert(0, "Cover", df["ImageUrl_nieuw"])
     preview["Leverbaarheid"] = codes.map(cb_service.leverbaarheid_label)
-
     st.dataframe(
-        preview, use_container_width=True, hide_index=True, height=440,
+        preview, use_container_width=True, hide_index=True, height=420,
         column_config={
             "Cover": st.column_config.ImageColumn("Cover", width="small"),
             "Isbn": st.column_config.TextColumn("ISBN", width="medium"),
@@ -728,10 +755,41 @@ def _zoek_resultaten_tonen() -> None:
         },
     )
     if codes.isin(["7", "8", "9", "10"]).any():
-        st.caption("\\* Leverbaarheidscodes 7 t/m 10 zijn empirisch afgeleid en "
-                   "nog niet bevestigd door CB-support.")
+        st.caption("Let op: leverbaarheidscodes 7 tot en met 10 zijn empirisch "
+                   "afgeleid en nog niet bevestigd door CB-support.")
+    _resultaat_blok(df, "cb_zoekresultaat", "zkcb")
 
-    _resultaat_blok(df, "cb_zoekresultaat", "zk")
+
+def _zoek_blok_nielsen() -> None:
+    """Resultaten van Nielsen: tegels, overzichtstabel en het 141-koloms bestand."""
+    df = st.session_state["zk_nl_output"]
+    totaal = int(st.session_state.get("zk_nl_totaal", len(df)))
+    getoond = len(df)
+
+    st.markdown("#### Gevonden bij Nielsen")
+    _metric_tegels([
+        (f"{totaal}", "treffers bij Nielsen", "m-blauw"),
+        (f"{getoond}", "opgehaald", "m-paars"),
+    ])
+    if totaal > getoond:
+        st.caption(f"Nielsen heeft {totaal} treffers. Daarvan zijn er {getoond} "
+                   "opgehaald; elke zoekopdracht telt mee met het dagquotum, dus "
+                   "het aantal blijft bewust beperkt.")
+
+    # CNF1 bevat de volledige auteursnaam; CNS1 herhaalt diezelfde waarde.
+    kolommen = [templates.NIELSEN_ISBN_COL, "TL", "CNF1", "PUBN", "PUBPD"]
+    labels = ["ISBN", "Titel", "Auteur", "Uitgever", "Verschijningsdatum"]
+    aanwezig = [(k, l) for k, l in zip(kolommen, labels) if k in df.columns]
+    preview = df[[k for k, _ in aanwezig]].copy()
+    preview.columns = [l for _, l in aanwezig]
+    st.dataframe(
+        preview, use_container_width=True, hide_index=True, height=420,
+        column_config={
+            "ISBN": st.column_config.TextColumn("ISBN", width="medium"),
+            "Titel": st.column_config.TextColumn("Titel", width="large"),
+        },
+    )
+    _resultaat_blok(df, "nielsen_zoekresultaat", "zknl")
 
 
 def view_zoeken() -> None:
@@ -745,7 +803,8 @@ def view_zoeken() -> None:
             with col_term:
                 term = st.text_input(
                     "Zoekterm", key="zk_term", label_visibility="collapsed",
-                    placeholder="Auteur, titel of ISBN — bijv. Hueber, Menschen A1, 9783194919013",
+                    placeholder=("Auteur, titel of ISBN, bijvoorbeeld Hueber, "
+                                 "Menschen A1 of 9783194919013"),
                 )
             with col_max:
                 maximum = st.selectbox(
@@ -753,27 +812,60 @@ def view_zoeken() -> None:
                     key="zk_max", label_visibility="collapsed",
                     format_func=lambda n: f"max. {n}",
                 )
-            zoeken = st.form_submit_button("🔎  Zoeken", use_container_width=True)
+            col_cb, col_nl = st.columns(2, gap="medium")
+            with col_cb:
+                bron_cb = st.checkbox("CB (Centraal Boekhuis)", value=True,
+                                      key="zk_bron_cb")
+            with col_nl:
+                bron_nl = st.checkbox("Nielsen BookData", value=False,
+                                      key="zk_bron_nl")
+            zoeken = st.form_submit_button("Zoeken", use_container_width=True)
         st.markdown(
-            '<div class="pim-zoek-hint">Eén veld voor alles: een auteursnaam, '
-            '(een deel van) een titel, of een ISBN-13. Enter zoekt ook.</div>',
+            '<div class="pim-zoek-hint">Kies zelf waar je zoekt. CB is onbeperkt '
+            'en snel; Nielsen dekt de internationale catalogus, maar elke '
+            'zoekopdracht telt mee met het dagquotum van 1000. Beide tegelijk '
+            'mag ook: je krijgt dan per bron een eigen tabel en bestand.</div>',
             unsafe_allow_html=True,
         )
         st.markdown('</div>', unsafe_allow_html=True)
 
     if zoeken:
-        if not (term or "").strip():
+        schoon = (term or "").strip()
+        if not schoon:
             st.warning("Vul eerst een zoekterm in.")
+        elif not (bron_cb or bron_nl):
+            st.warning("Kies minstens een bron: CB, Nielsen of allebei.")
         else:
-            try:
-                cfg = get_algolia_config()
-            except MissingSecretsError as exc:
-                st.error(str(exc))
-            else:
-                _zoek_uitvoeren(term.strip(), cfg, int(maximum))
+            _zoek_wissen()
+            fouten = []
+            if bron_cb:
+                fout = _zoek_cb(schoon, int(maximum))
+                if fout:
+                    fouten.append(f"CB: {fout}")
+            if bron_nl:
+                fout = _zoek_nielsen(schoon, int(maximum))
+                if fout:
+                    fouten.append(f"Nielsen: {fout}")
 
-    if "zk_output" in st.session_state:
-        _zoek_resultaten_tonen()
+            for melding in fouten:
+                st.error(melding)
+            if st.session_state.get("zk_nl_quota"):
+                st.warning("Het Nielsen-dagquotum is bereikt. Probeer het morgen "
+                           "opnieuw; CB blijft gewoon werken.")
+            if st.session_state.get("zk_nl_down"):
+                st.warning("Nielsen was tijdelijk niet bereikbaar.")
+            if (not fouten and "zk_cb_output" not in st.session_state
+                    and "zk_nl_output" not in st.session_state
+                    and not st.session_state.get("zk_nl_quota")):
+                st.warning(
+                    f"Geen resultaten voor '{schoon}'. Probeer een kortere of "
+                    "andere zoekterm, bijvoorbeeld alleen de achternaam van de auteur."
+                )
+
+    if "zk_cb_output" in st.session_state:
+        _zoek_blok_cb()
+    if "zk_nl_output" in st.session_state:
+        _zoek_blok_nielsen()
 
 
 # ---------------------------------------------------------------------------
