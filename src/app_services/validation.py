@@ -83,3 +83,24 @@ def unique_valid_isbns(rows: list[RowResult]) -> list[str]:
         if row.isbn and row.isbn not in seen:
             seen[row.isbn] = None
     return list(seen.keys())
+
+
+def looks_like_isbn13(text: str) -> str | None:
+    """Geef het geschoonde ISBN-13 terug als de tekst er een is, anders None.
+
+    Gebruikt door de vrij-zoeken-tab om te bepalen of een zoekterm als exacte
+    ISBN-lookup moet worden afgehandeld in plaats van als full-text zoekopdracht.
+    """
+    cleaned = _clean_isbn(text or "")
+    return cleaned if _is_isbn13(cleaned) else None
+
+
+def rows_from_isbns(isbns: list[str], status: str = STATUS_OK) -> list[RowResult]:
+    """Bouw RowResults voor een lijst gevonden ISBN's.
+
+    De vrij-zoeken-tab heeft geen inputbestand, maar build_output_df werkt met
+    RowResults; hiermee levert zoeken exact hetzelfde 50-koloms format op als
+    de CB-tab.
+    """
+    return [RowResult(index=i, raw=isbn, isbn=isbn, status=status)
+            for i, isbn in enumerate(isbns)]

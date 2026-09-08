@@ -158,3 +158,118 @@ def build_cb_row(isbn: str, record: dict, druk: str = "") -> dict[str, str]:
         "ImageUrl": _g(record, "ImageUrl"),
         "ImageUrl_nieuw": image_url_for(isbn),
     }
+
+
+# ---------------------------------------------------------------------------
+# Vrij zoeken (tab 3): full-text search op de CB Algolia-index
+# ---------------------------------------------------------------------------
+
+SEARCH_PAGE_SIZE = 100      # Algolia-maximum per pagina is 1000; 100 houdt de
+                            # voortgangsbalk vloeiend zonder extra round-trips.
+SEARCH_MAX_RESULTS = 1000   # Algolia's paginationLimitedTo-plafond.
+
+# CB BeschikbaarheidsCode -> leesbare tekst.
+# LET OP: 1 t/m 6 staan zo in de CB-documentatie. 7 t/m 10 zijn in augustus 2026
+# empirisch afgeleid uit het assortiment en NIET bevestigd door CB-support;
+# die krijgen een * mee zodat de gebruiker weet dat ze onder voorbehoud zijn.
+BESCHIKBAARHEID_LABELS = {
+    "1": "Leverbaar",
+    "2": "Nog niet verschenen",
+    "3": "Niet leverbaar, wordt herdrukt",
+    "4": "Niet leverbaar bij CB",
+    "5": "Niet leverbaar",
+    "6": "Wordt opnieuw uitgegeven",
+    "7": "Tijdelijk niet leverbaar *",
+    "8": "Beperkt/speciaal *",
+    "9": "Leverbaar via Van Ditmar-import *",
+    "10": "Alleen ISBN-registratie *",
+}
+
+
+def leverbaarheid_label(code: str | int | None) -> str:
+    """Leesbare leverbaarheid bij een BeschikbaarheidsCode.
+
+    Gebruik ALTIJD dit veld en nooit is_bestelbaar/bestelbaar_nl/bestelbaar_be:
+    die staan bij CB op alles op 'ja' en zijn dus waardeloos als filter.
+    """
+    key = str(code or "").strip()
+    if not key:
+        return ""
+    return BESCHIKBAARHEID_LABELS.get(key, f"Code {key}")
+
+
+def search_cb_records(query: str, cfg: AlgoliaConfig, max_results: int = 100,
+                      progress_cb: Callable[[int, int], None] | None = None
+                      ) -> tuple[list[dict], int]:
+    """Vrije zoekopdracht op auteur, titel, uitgever, ISBN, reeks, ...
+
+    Anders dan fetch_cb_records (dat exacte objectID-lookups doet) gebruikt dit
+    de Algolia search-endpoint, met Algolia's eigen relevantie-ordening.
+
+    Returns (records_op_relevantievolgorde, totaal_aantal_treffers). Het totaal
+    kan groter zijn dan het aantal teruggegeven records: er worden er maximaal
+    `max_results` opgehaald.
+    """
+    query = (query or "").strip()
+    if not query:
+        return [], 0
+
+    max_results = max(1, min(int(max_results), SEARCH_MAX_RESULTS))
+    url = f"https://{cfg.app_id}-dsn.algolia.net/1/indexes/{cfg.index_name}/query"
+    headers = {
+        "x-algolia-application-id": cfg.app_id,
+        "x-algolia-api-key": cfg.api_key,
+        "content-type": "application/json",
+    }
+
+    records: list[dict] = []
+    gezien: set[str] = set()
+    nb_hits = 0
+    page = 0
+    total_pages = 1
+
+    while len(records) < max_results:
+        rest = max_results - len(records)
+        payload = {
+            "query": query,
+            "hitsPerPage": min(SEARCH_PAGE_SIZE, rest),
+            "page": page,
+        }
+        try:
+            resp = requests.post(url, headers=headers, json=payload,
+                                 timeout=REQUEST_TIMEOUT)
+        except requests.RequestException as exc:
+            raise CBServiceError("CB (Algolia) is tijdelijk niet bereikbaar.") from exc
+
+        if resp.status_code in (401, 403):
+            raise CBAuthError(
+                "De CB-sleutel is verlopen of ongeldig. "
+                "Zie docs/runbook-cb-key.md om de sleutel te vernieuwen."
+            )
+        if resp.status_code != 200:
+            raise CBServiceError(f"CB (Algolia) gaf een fout (HTTP {resp.status_code}).")
+
+        data = resp.json()
+        hits = data.get("hits") or []
+        if page == 0:
+            nb_hits = int(data.get("nbHits") or 0)
+            # Hoeveel pagina's we echt gaan ophalen (voor de voortgangsbalk).
+            beschikbaar = min(nb_hits, max_results)
+            total_pages = max(1, (beschikbaar + SEARCH_PAGE_SIZE - 1) // SEARCH_PAGE_SIZE)
+
+        for hit in hits:
+            oid = str(hit.get("objectID") or hit.get("Isbn") or "").strip()
+            if oid and oid not in gezien:
+                gezien.add(oid)
+                records.append(hit)
+
+        if progress_cb:
+            progress_cb(min(page + 1, total_pages), total_pages)
+
+        page += 1
+        if not hits or page >= int(data.get("nbPages") or 0):
+            break
+        if len(records) < max_results:
+            time.sleep(0.25)
+
+    return records[:max_results], nb_hits

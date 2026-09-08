@@ -28,6 +28,7 @@ from src.app_services.output import build_output_df, df_to_xlsx_bytes
 from src.app_services.secrets import MissingSecretsError, get_algolia_config, get_nielsen_credentials
 from src.app_services.validation import (
     UploadError, parse_upload, unique_valid_isbns,
+    looks_like_isbn13, rows_from_isbns,
     STATUS_OK, STATUS_OK_CACHE, STATUS_NOT_FOUND,
 )
 
@@ -99,6 +100,10 @@ div[class*="st-key-card_"] {
     transition: transform .28s cubic-bezier(.2,.8,.3,1), box-shadow .28s;
     min-height: 430px;
 }
+/* Drie kaarten naast elkaar: iets compacter zodat ze in 1 viewport passen. */
+@media (min-width: 900px) {
+    div[class*="st-key-card_"] { padding: 2rem 1.7rem 1.5rem 1.7rem; min-height: 415px; }
+}
 div[class*="st-key-card_"]::before {
     content: ""; position: absolute; top: 0; left: 0; right: 0; height: 7px;
     transform: scaleX(0); transform-origin: left;
@@ -106,6 +111,7 @@ div[class*="st-key-card_"]::before {
 }
 .st-key-card_nielsen::before { background: linear-gradient(90deg, var(--it-blauw), #37a3e0); }
 .st-key-card_cb::before      { background: linear-gradient(90deg, var(--it-oranje), #f0a04b); }
+.st-key-card_zoeken::before  { background: linear-gradient(90deg, var(--it-paars), #8768ad); }
 div[class*="st-key-card_"]:hover {
     transform: translateY(-8px);
     box-shadow: 0 22px 48px rgba(0,0,0,.13);
@@ -121,6 +127,7 @@ div[class*="st-key-card_"]:hover::before { transform: scaleX(1); }
 div[class*="st-key-card_"]:hover .pim-card-icon { transform: scale(1.12) rotate(-4deg); }
 .pim-icon-blauw  { background: rgba(0,115,183,.10); }
 .pim-icon-oranje { background: rgba(210,112,28,.10); }
+.pim-icon-paars  { background: rgba(81,57,109,.10); }
 
 .pim-card-titel { font-size: 1.7rem; font-weight: 800; color: #1a1a1a; margin-bottom: .4rem; letter-spacing: -.02em; }
 .pim-card-tekst { color: #5a6165; font-size: 1.02rem; line-height: 1.55; margin-bottom: 1rem; }
@@ -136,7 +143,8 @@ div[class*="st-key-card_"]:hover .pim-card-icon { transform: scale(1.12) rotate(
 
 /* Kaart-knoppen: groot en in kaartkleur */
 .st-key-card_nielsen .stButton button,
-.st-key-card_cb .stButton button {
+.st-key-card_cb .stButton button,
+.st-key-card_zoeken .stButton button {
     width: 100%; padding: .95rem 1.4rem;
     font-size: 1.08rem; font-weight: 700;
     border-radius: 14px; border: none; color: #fff;
@@ -144,8 +152,10 @@ div[class*="st-key-card_"]:hover .pim-card-icon { transform: scale(1.12) rotate(
 }
 .st-key-card_nielsen .stButton button { background: var(--it-blauw); }
 .st-key-card_cb .stButton button      { background: var(--it-oranje); }
+.st-key-card_zoeken .stButton button  { background: var(--it-paars); }
 .st-key-card_nielsen .stButton button:hover,
-.st-key-card_cb .stButton button:hover { filter: brightness(1.12); transform: scale(1.02); color: #fff; }
+.st-key-card_cb .stButton button:hover,
+.st-key-card_zoeken .stButton button:hover { filter: brightness(1.12); transform: scale(1.02); color: #fff; }
 
 /* ------- Tool-views ------- */
 .pim-terug .stButton button {
@@ -200,6 +210,29 @@ div[class*="st-key-card_"]:hover .pim-card-icon { transform: scale(1.12) rotate(
 
 /* Voortgangsbalk in brand-groen */
 .stProgress > div > div > div > div { background: var(--it-groen) !important; }
+
+/* ------- Vrij zoeken (tab 3) ------- */
+.pim-zoekblok [data-testid="stTextInput"] input {
+    font-size: 1.1rem; padding: .9rem 1.1rem;
+    border-radius: 14px; border: 2px solid var(--it-border);
+    transition: border-color .2s, box-shadow .2s;
+}
+.pim-zoekblok [data-testid="stTextInput"] input:focus {
+    border-color: var(--it-paars);
+    box-shadow: 0 0 0 4px rgba(81,57,109,.10);
+}
+.pim-zoekblok [data-testid="stFormSubmitButton"] button {
+    width: 100%; padding: .92rem 1.5rem;
+    background: var(--it-paars); color: #fff;
+    font-size: 1.08rem; font-weight: 700;
+    border: none; border-radius: 14px;
+    transition: filter .2s, transform .15s, box-shadow .2s;
+}
+.pim-zoekblok [data-testid="stFormSubmitButton"] button:hover {
+    filter: brightness(1.15); color: #fff;
+    transform: translateY(-2px); box-shadow: 0 10px 26px rgba(81,57,109,.30);
+}
+.pim-zoek-hint { color: #6a7175; font-size: .9rem; margin: .1rem 0 .2rem 0; }
 
 /* Exact-publicatieknop (nog op slot): bewust aanwezig maar gedimd */
 div[class*="st-key-"][class*="_exactblok"] .stButton button {
@@ -361,7 +394,7 @@ def _resultaat_blok(df, prefix: str, key_prefix: str) -> None:
 
 def view_home() -> None:
     _brand_header("ISBN opzoeken")
-    col1, col2 = st.columns(2, gap="large")
+    col1, col2, col3 = st.columns(3, gap="large")
 
     with col1:
         with st.container(key="card_nielsen"):
@@ -403,6 +436,27 @@ def view_home() -> None:
             )
             if st.button("Start met CB  →", key="go_cb", use_container_width=True):
                 st.session_state.view = "cb"
+                st.rerun()
+
+    with col3:
+        with st.container(key="card_zoeken"):
+            st.markdown(
+                """
+                <div class="pim-card-icon pim-icon-paars">🔎</div>
+                <div class="pim-card-titel">Vrij zoeken</div>
+                <div class="pim-card-tekst">Zoek in de CB&#8209;catalogus op auteur,
+                titel of ISBN &mdash; zonder bestand. Alle treffers meteen in beeld,
+                met cover en leverbaarheid.</div>
+                <div class="pim-badges">
+                    <span class="pim-badge pim-badge-paars">geen upload nodig</span>
+                    <span class="pim-badge pim-badge-blauw">auteur &middot; titel &middot; ISBN</span>
+                    <span class="pim-badge pim-badge-groen">zelfde 50 kolommen</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("Start met zoeken  →", key="go_zoeken", use_container_width=True):
+                st.session_state.view = "zoeken"
                 st.rerun()
 
 
@@ -557,6 +611,138 @@ def view_cb() -> None:
         _resultaat_blok(st.session_state["cb_output"], "cb_verrijkt", "cb")
 
 
+def _zoek_uitvoeren(term: str, cfg, maximum: int) -> None:
+    """Voer de zoekopdracht uit en zet het resultaat in de sessie.
+
+    Een geldig ISBN-13 gaat via de exacte objectID-lookup (preciezer en
+    sneller); al het andere via de Algolia full-text zoekopdracht.
+    """
+    isbn = looks_like_isbn13(term)
+    voortgang = st.progress(0.0, text="Zoeken bij CB...")
+    try:
+        if isbn:
+            gevonden = cb_service.fetch_cb_records([isbn], cfg)
+            records = list(gevonden.values())
+            totaal = len(records)
+        else:
+            records, totaal = cb_service.search_cb_records(
+                term, cfg, max_results=maximum,
+                progress_cb=lambda p, t: voortgang.progress(
+                    min(p / t, 1.0), text=f"CB: pagina {p}/{t}"),
+            )
+    except (cb_service.CBAuthError, cb_service.CBServiceError) as exc:
+        voortgang.empty()
+        st.error(str(exc))
+        return
+    voortgang.empty()
+
+    paren = []
+    for record in records:
+        oid = str(record.get("objectID") or record.get("Isbn") or "").strip()
+        if oid:
+            paren.append((oid, record))
+
+    if not paren:
+        for sleutel in ("zk_output", "zk_totaal", "zk_term_gebruikt"):
+            st.session_state.pop(sleutel, None)
+        st.warning(
+            f"Geen resultaten voor “{term}”. Probeer een kortere of andere "
+            "zoekterm — bijvoorbeeld alleen de achternaam van de auteur."
+        )
+        return
+
+    isbns = [oid for oid, _ in paren]
+    data_by_isbn = {oid: cb_service.build_cb_row(oid, record) for oid, record in paren}
+    df = build_output_df(rows_from_isbns(isbns), data_by_isbn,
+                         templates.CB_COLUMNS, templates.CB_ISBN_COL,
+                         {oid: "CB" for oid in isbns})
+
+    st.session_state["zk_output"] = df
+    st.session_state["zk_totaal"] = totaal
+    st.session_state["zk_term_gebruikt"] = term
+
+
+def _zoek_resultaten_tonen() -> None:
+    df = st.session_state["zk_output"]
+    totaal = int(st.session_state.get("zk_totaal", len(df)))
+    getoond = len(df)
+    codes = df["BeschikbaarheidsCode"].astype(str).str.strip()
+    leverbaar = int((codes == "1").sum())
+
+    _metric_tegels([
+        (f"{totaal}", "treffers bij CB", "m-paars"),
+        (f"{getoond}", "opgehaald", "m-blauw"),
+        (f"{leverbaar}", "direct leverbaar", "m-oranje"),
+    ])
+    if totaal > getoond:
+        st.caption(
+            f"CB heeft {totaal} treffers; de {getoond} meest relevante zijn opgehaald. "
+            "Verhoog 'max. resultaten' of maak de zoekterm specifieker."
+        )
+
+    preview = df[["Isbn", "Hoofdtitel", "Auteur", "Uitgever",
+                  "Verschijningsjaar", "Prijs"]].copy()
+    preview.insert(0, "Cover", df["ImageUrl_nieuw"])
+    preview["Leverbaarheid"] = codes.map(cb_service.leverbaarheid_label)
+
+    st.dataframe(
+        preview, use_container_width=True, hide_index=True, height=440,
+        column_config={
+            "Cover": st.column_config.ImageColumn("Cover", width="small"),
+            "Isbn": st.column_config.TextColumn("ISBN", width="medium"),
+            "Hoofdtitel": st.column_config.TextColumn("Titel", width="large"),
+            "Verschijningsjaar": st.column_config.TextColumn("Jaar", width="small"),
+        },
+    )
+    if codes.isin(["7", "8", "9", "10"]).any():
+        st.caption("\\* Leverbaarheidscodes 7 t/m 10 zijn empirisch afgeleid en "
+                   "nog niet bevestigd door CB-support.")
+
+    _resultaat_blok(df, "cb_zoekresultaat", "zk")
+
+
+def view_zoeken() -> None:
+    _brand_header("Vrij zoeken")
+    _terug_knop()
+
+    with st.container(key="zoekblok"):
+        st.markdown('<div class="pim-zoekblok">', unsafe_allow_html=True)
+        with st.form("zk_form"):
+            col_term, col_max = st.columns([3.4, 1], gap="medium")
+            with col_term:
+                term = st.text_input(
+                    "Zoekterm", key="zk_term", label_visibility="collapsed",
+                    placeholder="Auteur, titel of ISBN — bijv. Hueber, Menschen A1, 9783194919013",
+                )
+            with col_max:
+                maximum = st.selectbox(
+                    "Max. resultaten", [25, 50, 100, 250, 500, 1000], index=2,
+                    key="zk_max", label_visibility="collapsed",
+                    format_func=lambda n: f"max. {n}",
+                )
+            zoeken = st.form_submit_button("🔎  Zoeken", use_container_width=True)
+        st.markdown(
+            '<div class="pim-zoek-hint">Eén veld voor alles: een auteursnaam, '
+            '(een deel van) een titel, of een ISBN-13. Enter zoekt ook.</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if zoeken:
+        if not (term or "").strip():
+            st.warning("Vul eerst een zoekterm in.")
+        else:
+            try:
+                cfg = get_algolia_config()
+            except MissingSecretsError as exc:
+                st.error(str(exc))
+            else:
+                _zoek_uitvoeren(term.strip(), cfg, int(maximum))
+
+    if "zk_output" in st.session_state:
+        _zoek_resultaten_tonen()
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -571,5 +757,7 @@ if st.session_state.view == "nielsen":
     view_nielsen()
 elif st.session_state.view == "cb":
     view_cb()
+elif st.session_state.view == "zoeken":
+    view_zoeken()
 else:
     view_home()
